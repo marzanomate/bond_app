@@ -1,6 +1,3 @@
-pip install alphacast
-pip install QuantLib-Python
-
 import streamlit as st
 import scipy.optimize as optimize
 from datetime import datetime, timedelta
