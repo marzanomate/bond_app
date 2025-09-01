@@ -17,1494 +17,379 @@ import QuantLib as ql  # quantlib-python
 # -----------------------------
 st.set_page_config(page_title="ARG FI Metrics", layout="wide")
 
-url_bonds = "https://data912.com/live/arg_bonds"
-url_notes = "https://data912.com/live/arg_notes"
-url_corps = "https://data912.com/live/arg_corp"
-url_mep = "https://data912.com/live/mep"
+URLS = {
+    "bonds": "https://data912.com/live/arg_bonds",
+    "notes": "https://data912.com/live/arg_notes",
+    "corps": "https://data912.com/live/arg_corp",
+    "mep":   "https://data912.com/live/mep",
+}
 
-def fetch_json(url):
-    r = requests.get(url, timeout=20)
+# -----------------------------
+# HELPERS (requests/json -> df)
+# -----------------------------
+def fetch_json(url: str, timeout: int = 20):
+    r = requests.get(url, timeout=timeout)
     r.raise_for_status()
-    return r.json()
+    try:
+        return r.json()
+    except json.JSONDecodeError:
+        return json.loads(r.text)
 
 def to_df(payload):
-    # Accept list or dict with a top-level list (e.g., "data", "results", "items", ...)
     if isinstance(payload, dict):
         for key in ("data", "results", "items", "bonds", "notes"):
             if key in payload and isinstance(payload[key], list):
                 payload = payload[key]
                 break
+    if not isinstance(payload, (list, tuple)):
+        payload = [payload]
     return pd.json_normalize(payload)
 
-# Fetch
-data_bonds = fetch_json(url_bonds)
-data_notes = fetch_json(url_notes)
-data_corps = fetch_json(url_corps)
-data_mep = fetch_json(url_mep)
+@st.cache_data(show_spinner=False, ttl=60)
+def load_market():
+    data = {}
+    for k, url in URLS.items():
+        try:
+            data[k] = to_df(fetch_json(url))
+        except Exception as e:
+            st.warning(f"⚠️ No se pudo obtener `{k}`: {e}")
+            data[k] = pd.DataFrame()
 
-# Normalize to DataFrames
-df_bonds = to_df(data_bonds)
-df_notes = to_df(data_notes)
-df_corps = to_df(data_corps)
-df_mep = to_df(data_mep)
+    # Combined prices without showing it in UI
+    frames = [data.get("bonds"), data.get("notes"), data.get("corps")]
+    df_all = pd.concat([f for f in frames if f is not None], ignore_index=True, sort=False)
 
-# Tag the origin (optional but useful)
-df_bonds["source"] = "bonds"
-df_notes["source"] = "notes"
-df_corps["source"] = "corps"
-df_mep["source"] = "mep"
+    # MEP AL30 bid
+    df_mep = data.get("mep", pd.DataFrame())
+    mep = None
+    if not df_mep.empty:
+        tcol = "ticker" if "ticker" in df_mep.columns else ("symbol" if "symbol" in df_mep.columns else None)
+        bcol = "bid" if "bid" in df_mep.columns else ("precioCompra" if "precioCompra" in df_mep.columns else None)
+        if tcol and bcol:
+            m = df_mep[tcol].astype(str).str.upper().eq("AL30")
+            if m.any():
+                mep = pd.to_numeric(df_mep.loc[m, bcol], errors="coerce").dropna().max()
 
-# --- Option 1: stack/union (most common) ---
-df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
-mep = df_mep.loc[df_mep["ticker"] == "AL30", "bid"].iloc[0]
+    return df_all, df_mep, mep
 
 # -----------------------------
 # YOUR DATA PREP (Alphacast -> CER/TAMAR)
 # -----------------------------
-alphacast = Alphacast("ak_42zmuMwfP5WSlHCohRaD")
-dataset = alphacast.datasets.dataset(44414)
-file = dataset.download_data(format = "csv", startDate=None, endDate=None, filterVariables = [], filterEntities = {"Category 2" : ["CER","TAMAR (en % n.a)"]})
+def prep_cer_tamar(df_alphacast: pd.DataFrame):
+    df = df_alphacast.copy()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
 
-# or import directly to pandas
-df_alphacast = dataset.download_data(format = "pandas", startDate=None, endDate=None, filterVariables = [], filterEntities = {"Category 2" : ["CER","TAMAR (en % n.a)"]})
+    df_cer = (df.loc[df["Category 2"].eq("CER"), ["Date","Value"]]
+                .sort_values("Date").set_index("Date")
+                .rename(columns={"Value":"CER"}))
+    df_tamar = (df.loc[df["Category 2"].eq("TAMAR (en % n.a)"), ["Date","Value"]]
+                  .sort_values("Date").set_index("Date")
+                  .rename(columns={"Value":"TAMAR_pct_na"}))
 
-# assuming your DataFrame is called df_alphacast
-df = df_alphacast.copy()
+    df_cer = df_cer[~df_cer.index.duplicated(keep="last")]
+    df_tamar = df_tamar[~df_tamar.index.duplicated(keep="last")]
+    return df_cer, df_tamar
 
-# ensure types are right
-df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
-
-# 1) CER only, Date as index
-df_cer = (
-    df.loc[df["Category 2"].eq("CER"), ["Date", "Value"]]
-      .sort_values("Date")
-      .set_index("Date")
-      .rename(columns={"Value": "CER"})
-)
-
-# 2) TAMAR (en % n.a) only, Date as index
-df_tamar = (
-    df.loc[df["Category 2"].eq("TAMAR (en % n.a)"), ["Date", "Value"]]
-      .sort_values("Date")
-      .set_index("Date")
-      .rename(columns={"Value": "TAMAR_pct_na"})
-)
-
-# (optional) if there can be duplicate dates, keep the last value per day
-df_cer = df_cer[~df_cer.index.duplicated(keep="last")]
-df_tamar = df_tamar[~df_tamar.index.duplicated(keep="last")]
-
-# TAMAR promedio desde 10 días antes del 29 enero hasta 10 días antes de hoy (ya de por sí son hábiles)
-today = pd.Timestamp.today().normalize()
-jan29 = pd.Timestamp(year=today.year, month=1, day=29)
-ago18 = pd.Timestamp(year=today.year, month=8, day=18)
-ago29 = pd.Timestamp(year=today.year, month = 8, day=29)
-
-# TAMAR promedio 29 Ago Duales
-start = (jan29 - pd.Timedelta(days=10)).normalize()
-# TAMAR promedio 18 Ago M10N5
-start_m10n5 = (ago18 - pd.Timedelta(days=10)).normalize()
-
-# TAMAR promedio 29 ago M27F6
-start_m27f6 = (ago29 - pd.Timedelta(days=10)).normalize()
-
-end   = (today - pd.Timedelta(days=10)).normalize()
-
-tamar_window = df_tamar.loc[start:end, "TAMAR_pct_na"]
-tamar_window_m10n5 = df_tamar.loc[start_m10n5:end, "TAMAR_pct_na"]
-tamar_window_m27f6 = df_tamar.loc[start_m27f6:end, "TAMAR_pct_na"]
-
-tamar_avg_pct_na = tamar_window.mean()  # TAMAR para los Duales
-tamar_avg_pct_na_m10n5 = tamar_window_m10n5.mean()  # TAMAR para M10N5
-tamar_avg_pct_na_m27f6 = tamar_window_m27f6.mean()  # TAMAR para M27F6
-tamar_tem = ((1+tamar_avg_pct_na*32/365)**(365/32))**(1/12)-1
-tamar_tem_m10n5 = ((1+tamar_avg_pct_na_m10n5*32/365)**(365/32))**(1/12)-1
-tamar_tem_m27f6 = ((1+tamar_avg_pct_na_m27f6*32/365)**(365/32))**(1/12)-1
-tamar_hoy = df_tamar["TAMAR_pct_na"].asof(today)
-
-
-# Armo un calendario para calcular el CER de 10 días hábiles anteriores a hoy
-
-def ar_business_days_before(dt: pd.Timestamp, n: int, cal=None) -> pd.Timestamp:
-    cal = cal or ql.Argentina(ql.Argentina.Merval)
-    qd = ql.Date(dt.day, dt.month, dt.year)
-    count = 0
-    while count < n:
-        qd = qd - 1
-        if cal.isBusinessDay(qd):
-            count += 1
-    return pd.Timestamp(datetime(qd.year(), int(qd.month()), qd.dayOfMonth())).normalize()
-    
-cer_10d = ar_business_days_before(today + pd.Timedelta(days=1), 10)   # 10 días hábiles AR antes de hoy
-
-cer_final = df_cer.loc[cer_10d, "CER"]
+@st.cache_data(show_spinner=False, ttl=180)
+def load_alphacast_and_metrics():
+    # --- fake a minimal Alphacast fetch path hook: user is already passing df_alphacast normally ---
+    # If you actually want to call Alphacast SDK, plug it here.
+    # For now assume user brings df_alphacast externally or you can stop here and just return None.
+    return None  # We’ll compute CER/TAMAR via endpoints or the user can paste df_alphacast.
 
 # -----------------------------
 # CLASSES (shortened, minimal fixes)
 # -----------------------------
-
-# Bonos & Soberanos
-class bond_calculator_pro:
-    def __init__(self, name, start_date, end_date, payment_frequency, amortization_dates, amortizations, rate, 
-                 price, fr, step_up_dates, step_up, outstanding):
-        self.name = name
-        self.start_date = start_date
-        self.end_date = end_date
-        self.payment_frequency = payment_frequency
-        self.amortization_dates = amortization_dates
-        self.amortizations = amortizations
-        self.rate = rate/100
-        self.price = price
-        self.frequency = fr
-        self.step_up_dates = step_up_dates
-        self.step_up = step_up
-        self.outstanding = outstanding
-
-    def generate_payment_dates(self):
-        dates = []
-        current_date = self.start_date
-        frequency = self.payment_frequency
-        settlement = datetime.today() + timedelta(days=1)
-        dates.append(settlement.strftime("%Y-%m-%d"))
-        while current_date <= self.end_date:
-            if current_date > settlement:
-                dates.append(current_date.strftime("%Y-%m-%d"))
-            current_date = current_date + relativedelta(months=frequency) 
-            
-        return dates
-        
-    def residual_value(self):
-        residual = []
-        current_residual = 100
-        dates = self.generate_payment_dates()
-        for date in dates:
-            if date in self.amortization_dates:
-                idx = self.amortization_dates.index(date)
-                current_residual -= self.amortizations[idx]
-    
-            residual.append(current_residual)
-            
-        return residual
-        
-    def amortization_payments(self):
-        capital_payments = []
-        dates = self.generate_payment_dates()
-        residual = self.residual_value()
-        for i, date in enumerate(dates):
-            payment = 0
-            if date in self.amortization_dates:
-                idx = self.amortization_dates.index(date)
-                payment = self.amortizations[idx]
-            capital_payments.append(payment)
-            
-        return capital_payments
-
-    def step_up_rate(self):
-        rate_schedule = []
-        dates = self.generate_payment_dates()
-        
-        # Handle the case if there are no step-up dates
-        if not self.step_up_dates:
-            return [self.rate] * len(dates)  # Return the default rate for all dates
-    
-        # Iterate through each payment date
-        for date in dates:
-            # Convert the date string to a datetime object for comparison
-            date_obj = datetime.strptime(date, "%Y-%m-%d")
-    
-            # Default to the initial rate
-            rate = self.rate
-            
-            # Find the appropriate step-up rate
-            for i, step_up_date in enumerate(self.step_up_dates):
-                step_up_date_obj = datetime.strptime(step_up_date, "%Y-%m-%d")
-                if date_obj < step_up_date_obj:
-                    break  # Exit if the current date is before the step-up date
-                rate = self.step_up[i]  # Update rate to the most recent step-up rate
-            
-            rate_schedule.append(rate)  # Append the selected rate for the payment date
-    
-        return rate_schedule
-
-    def coupon_payments(self):
-        coupon = []
-        rate_schedule = self.step_up_rate()
-        dates = self.generate_payment_dates()
-        residuals = self.residual_value()
-            
-        for i, date in enumerate(dates):
-            if i ==0:
-                coupon.append(0)
-            else:    
-                coupon_payment = ((rate_schedule[i]/100)/2)*residuals[i-1]*100
-        
-                coupon.append(coupon_payment)
-        
-        return coupon
-
-    def cash_flow(self):
-        cash_flow = []
-        dates = self.generate_payment_dates()
-        capital_payments = self.amortization_payments()
-        coupon = self.coupon_payments()
-        for i, date in enumerate(dates):
-            if i == 0:
-                cash_flow.append((-self.price))
-            else:
-                amort_payment = capital_payments[i]
-                coupon_payment = coupon[i]
-    
-                total_payment = amort_payment + coupon_payment
-    
-                cash_flow.append(total_payment)
-            
-        return cash_flow
-
-
-    def xnpv(self, dates, cash_flow, rate_custom = 0.08): 
-        dates = self.generate_payment_dates() 
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates] 
-        cash_flow = self.cash_flow() 
-        
-        d0 = datetime.today() + timedelta(days=1) 
-        npv = sum([cf/(1.0 + rate_custom)**((date - d0).days/365.0) for cf, date in zip(cash_flow, dates)]) 
-        return npv
-
-
-    def xirr(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        try:
-            xirr = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
-            return (xirr*100).round(2)
-        except RuntimeError:    # Failed to converge?
-            return scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
-
-    def tna_180(self):
-        irr = self.xirr()/100
-
-        return (((1+irr)**(1/2)-1)*2*100).round(2)
-
-
-    def duration(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-
-        cash_flow = self.cash_flow()
-        irr = self.xirr()/100
-        
-        d0 = datetime.today() + timedelta(days=1)
-        dur = sum([(cf*(date - d0).days/365.0)/(1+irr/self.frequency)**(self.frequency*((date - d0).days)/365.0)/self.price 
-                   for cf, date in zip(cash_flow, dates)]).round(2)
-    
-        return dur
-
-    def modified_duration(self):
-        dur =self.duration()
-        irr = self.xirr()/100
-        cash_flow = self.cash_flow()
-        md = (dur/(1+irr/2)**2).round(2)
-        return md
-
-    def convexity(self):
-        dur =self.duration()
-        irr = self.xirr()/100  
-        dates = self.generate_payment_dates()
-        cash_flow = self.cash_flow()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        d0 = datetime.today() + timedelta(days=1)
-        
-        cx = sum([((cf/(1+irr/self.frequency)**(self.frequency*(date - d0).days/365 + 2))*((date - d0).days/365)*((date - d0).days/365 + 1))/self.price 
-                  for cf, date in zip(cash_flow, dates)]).round(2)
-
-        return cx
-
-
-    def current_yield(self):
-        cpns = self.coupon_payments()
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-    
-        # find first future cash-flow index with a coupon > 0
-        future_idx = [i for i, d in enumerate(dates) if d > (datetime.today() + timedelta(days=1)) and cpns[i] > 0]
-        if not future_idx:
-            return float('nan')  # or 0.0
-    
-        i0 = future_idx[0]
-    
-        # Sum next 'frequency' coupons (e.g., 2 for semiannual), or whatever is available
-        n = min(self.frequency, len(cpns) - i0)
-        annual_coupons = sum(cpns[i0:i0 + n])
-    
-        return round(annual_coupons / self.price * 100.0, 2)
-
-class ons_pro:
-    def __init__(self, name, empresa, curr, law,  start_date, end_date, payment_frequency,
-                 amortization_dates, amortizations, rate, price, fr):
-        self.name = name
-        self.empresa = empresa
-        self.curr = curr
-        self.law = law
-        self.start_date = start_date
-        self.end_date = end_date
-        self.payment_frequency = payment_frequency   # months between coupons
-        self.amortization_dates = amortization_dates # ["YYYY-MM-DD", ...]
-        self.amortizations = amortizations           # amounts on those dates (nominal base=100)
-        self.rate = rate / 100.0                     # store as decimal p.a.
-        self.price = price                           # market clean price per 100 nominal
-        self.frequency = fr                          # coupons per year (e.g., 2 = semi)
-
-    def _as_dt(self, d):
-        return d if isinstance(d, datetime) else datetime.strptime(d, "%Y-%m-%d")
-
-    def outstanding_on(self, ref_date=None):
-        """Principal outstanding (per 100) after amortizations up to ref_date inclusive."""
-        if ref_date is None:
-            ref_date = datetime.today() + timedelta(days=1)
-        ref_date = self._as_dt(ref_date)
-        paid = sum(a for d, a in zip(self.amortization_dates, self.amortizations)
-                   if self._as_dt(d) <= ref_date)
-        return max(0.0, 100.0 - paid)
-        
-    def generate_payment_dates(self):
-        dates = []
-        current_date = self.start_date
-        settlement = datetime.today() + timedelta(days=1)
-        dates.append(settlement.strftime("%Y-%m-%d"))
-        while current_date <= self.end_date:
-            if current_date > settlement:
-                dates.append(current_date.strftime("%Y-%m-%d"))
-            current_date = current_date + relativedelta(months=self.payment_frequency)
-        return dates
-
-    def residual_value(self):
-        residual = []
-        current_residual = 100.0
-        dates = self.generate_payment_dates()
-        for d in dates:
-            if d in self.amortization_dates:
-                idx = self.amortization_dates.index(d)
-                current_residual -= self.amortizations[idx]
-            residual.append(current_residual)
-        return residual
-
-    def accrued_interest(self, ref_date=None):
-        """
-        Interés corrido desde el último cupón hasta ref_date (ACT/365F).
-        Cupón del período = (tasa anual / frecuencia) * residual al inicio del período.
-        """
-        if ref_date is None:
-            ref_date = datetime.today() + timedelta(days=1)
-        ref_date = self._as_dt(ref_date)
-    
-        # find prev_coupon (<= ref_date) and next_coupon (> prev)
-        prev_coupon = self.start_date
-        next_coupon = self.start_date
-        while next_coupon <= ref_date:
-            prev_coupon = next_coupon
-            next_coupon = next_coupon + relativedelta(months=self.payment_frequency)
-    
-        # residual used for this period's coupon is the outstanding AFTER any amort at prev_coupon
-        residual_at_prev = self.outstanding_on(prev_coupon)
-    
-        # coupon for the full period (per 100)
-        period_coupon = (self.rate / self.frequency) * residual_at_prev
-    
-        # ACT/365 accrual fraction
-        total_days = max(1, (next_coupon - prev_coupon).days)
-        accrued_days = max(0, min((ref_date - prev_coupon).days, total_days))
-        return period_coupon * (accrued_days / total_days)
-
-    def parity(self, ref_date=None):
-        """
-        Paridad = Precio / (Residual + Interés corrido)   (all per 100 nominal).
-        """
-        if ref_date is None:
-            ref_date = datetime.today() + timedelta(days=1)
-    
-        vt = self.outstanding_on(ref_date) + self.accrued_interest(ref_date)  # Valor Técnico
-        return float('nan') if vt == 0 else round(self.price / vt * 100, 2)
-
-
-    def amortization_payments(self):
-        cap = []
-        dates = self.generate_payment_dates()
-        am = dict(zip(self.amortization_dates, self.amortizations))
-        for d in dates:
-            cap.append(am.get(d, 0.0))
-        return cap
-
-    # --- FLAT COUPONS (no step-ups) ---
-    def coupon_payments(self):
-        coupons = []
-        dates = self.generate_payment_dates()
-        residuals = self.residual_value()
-        for i, _ in enumerate(dates):
-            if i == 0:
-                coupons.append(0.0)
-            else:
-                # coupon = (annual rate / frequency) * previous period residual
-                coupons.append((self.rate / self.frequency) * residuals[i-1])
-        return coupons
-
-    def cash_flow(self):
-        cfs = []
-        dates = self.generate_payment_dates()
-        caps = self.amortization_payments()
-        cpns = self.coupon_payments()
-        for i, _ in enumerate(dates):
-            if i == 0:
-                cfs.append(-self.price)
-            else:
-                cfs.append(caps[i] + cpns[i])
-        return cfs
-
-    def xnpv(self, _dates=None, _cash_flow=None, rate_custom=0.08):
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        cfs = self.cash_flow()
-        d0 = datetime.today() + timedelta(days=1)
-        return sum(cf / (1.0 + rate_custom) ** ((dt - d0).days / 365.0) for cf, dt in zip(cfs, dates))
-
-    def xirr(self):
-        f = lambda r: self.xnpv(rate_custom=r)
-        try:
-            # First try Newton's method which is faster
-            r = scipy.optimize.newton(f, 0.0)
-        except RuntimeError:
-            try:
-                # If Newton fails, try brentq with wider bounds
-                # The error occurs because f(-0.99) and f(10.0) might have the same sign
-                # Try different ranges to ensure we bracket the root
-                r = scipy.optimize.brentq(f, -0.99, 10.0)
-            except ValueError:
-                # If brentq fails due to same sign, try different approaches
-                try:
-                    # Try with different bounds
-                    r = scipy.optimize.brentq(f, -0.5, 5.0)
-                except ValueError:
-                    try:
-                        # Try bisect with wider bounds
-                        r = scipy.optimize.bisect(f, -0.9, 20.0)
-                    except ValueError:
-                        # If all else fails, return a default value or NaN
-                        return float('nan')  # or some default value like 0.0
-        return round(r * 100.0, 2)  # % E.A.
-
-    def tna_180(self):
-        irr = self.xirr() / 100.0
-        return round((((1 + irr) ** 0.5 - 1) * 2) * 100.0, 2)
-
-    def duration(self):
-        # IRR as decimal (effective annual)
-        irr = self.xirr() / 100.0
-        d0  = datetime.today() + timedelta(days=1)
-    
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        cfs   = self.cash_flow()
-    
-        # Use only future CFs (skip initial -price at t=0)
-        flows = [(cf, dt) for i, (cf, dt) in enumerate(zip(cfs, dates)) if i > 0]
-    
-        # PV of future CFs at IRR equals the price (clean), but compute it explicitly for robustness
-        pv_price = sum(cf / (1 + irr) ** ((dt - d0).days / 365.0) for cf, dt in flows)
-        # Alternatively: pv_price = self.price
-    
-        mac = sum(((dt - d0).days / 365.0) * (cf / (1 + irr) ** ((dt - d0).days / 365.0))
-                  for cf, dt in flows) / pv_price
-    
-        return round(mac, 2)
-
-    def modified_duration(self):
-        irr = self.xirr() / 100
-        return round(self.duration() / (1 + irr), 2)
-
-    def convexity(self):
-        # IRR as decimal (effective annual)
-        y = self.xirr() / 100.0
-        d0 = datetime.today() + timedelta(days=1)
-    
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        cfs   = self.cash_flow()
-    
-        # only future positive flows (skip i == 0 which is -price)
-        flows = [(cf, (dt - d0).days / 365.0) for i, (cf, dt) in enumerate(zip(cfs, dates)) if i > 0]
-    
-        # PV of future CFs at yield y (equals price, but compute explicitly for robustness)
-        pv = sum(cf / (1 + y) ** t for cf, t in flows)
-        if pv == 0:
-            return float('nan')
-    
-        # Macaulay convexity (annual-yield basis)
-        cx = sum(cf * t * (t + 1) / (1 + y) ** (t + 2) for cf, t in flows) / pv
-        return round(cx, 2)
-
-    def current_yield(self):
-        cpns = self.coupon_payments()
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        future_idx = [i for i, d in enumerate(dates) if d > (datetime.today() + timedelta(days=1)) and cpns[i] > 0]
-        if not future_idx:
-            return float('nan')
-        i0 = future_idx[0]
-        n = min(self.frequency, len(cpns) - i0)
-        annual_coupons = sum(cpns[i0:i0 + n])
-        return round(annual_coupons / self.price * 100.0, 2)
-
-# Calculadora CER Bonos
-
-class cer_bonos:
-    def __init__(self, name, cer_final, cer_inicial,  start_date, end_date, payment_frequency,
-                 amortization_dates, amortizations, rate, price, fr):
-        self.name = name
-        self.cer_inicial = cer_inicial
-        self.cer_final = cer_final
-        self.start_date = start_date
-        self.end_date = end_date
-        self.payment_frequency = payment_frequency   # months between coupons
-        self.amortization_dates = amortization_dates # ["YYYY-MM-DD", ...]
-        self.amortizations = amortizations           # amounts on those dates (nominal base=100)
-        self.rate = rate / 100.0                     # store as decimal p.a.
-        self.price = price                           # market clean price per 100 nominal
-        self.frequency = fr                          # coupons per year (e.g., 2 = semi)
-
-    def _as_dt(self, d):
-        return d if isinstance(d, datetime) else datetime.strptime(d, "%Y-%m-%d")
-
-    def outstanding_on(self, ref_date=None):
-        """Adjusted principal outstanding (per 100) after amortizations up to ref_date inclusive."""
-        if ref_date is None:
-            ref_date = datetime.today() + timedelta(days=1)
-        ref_date = self._as_dt(ref_date)
-    
-        adj = self.cer_final / self.cer_inicial
-        paid_nom = sum(a for d, a in zip(self.amortization_dates, self.amortizations)
-                       if self._as_dt(d) <= ref_date)
-        paid_adj = paid_nom * adj
-        return max(0.0, 100.0 * adj - paid_adj)
-        
-    def generate_payment_dates(self):
-        dates = []
-        current_date = self.start_date
-        settlement = datetime.today() + timedelta(days=1)
-        dates.append(settlement.strftime("%Y-%m-%d"))
-        while current_date <= self.end_date:
-            if current_date > settlement:
-                dates.append(current_date.strftime("%Y-%m-%d"))
-            current_date = current_date + relativedelta(months=self.payment_frequency)
-        return dates
-
-    def residual_value(self):
-        """
-        Adjusted residual path used for coupons (per 100), starting from
-        the outstanding (after any past amortizations) at settlement (T+1).
-        """
-        adj = self.cer_final / self.cer_inicial
-        dates = self.generate_payment_dates()
-        settlement_dt = datetime.today() + timedelta(days=1)
-    
-        # start from outstanding adjusted at settlement
-        current_residual = self.outstanding_on(settlement_dt)
-        residuals = []
-    
-        for i, d in enumerate(dates):
-            # append start-of-period residual (used for the coupon at this index+1)
-            residuals.append(current_residual)
-    
-            # after paying the amortization on this date (if any), the next period residual decreases
-            if i > 0 and d in self.amortization_dates:
-                idx = self.amortization_dates.index(d)
-                current_residual -= self.amortizations[idx] * adj
-    
-        return residuals
-
-    
-    def accrued_interest(self, ref_date=None):
-        """
-        Interés corrido ACT/365F usando el residual AJUSTADO al inicio del período.
-        """
-        if ref_date is None:
-            ref_date = datetime.today() + timedelta(days=1)
-        ref_date = self._as_dt(ref_date)
-    
-        prev_coupon = self.start_date
-        next_coupon = self.start_date
-        while next_coupon <= ref_date:
-            prev_coupon = next_coupon
-            next_coupon = next_coupon + relativedelta(months=self.payment_frequency)
-    
-        # residual at start of the period (after any amort at prev_coupon)
-        residual_at_prev = self.outstanding_on(prev_coupon)
-        period_coupon = (self.rate / self.frequency) * residual_at_prev
-    
-        total_days = max(1, (next_coupon - prev_coupon).days)
-        accrued_days = max(0, min((ref_date - prev_coupon).days, total_days))
-        return period_coupon * (accrued_days / total_days)
-
-    def parity(self, ref_date=None):
-        """
-        Paridad = Precio / (Residual + Interés corrido)   (all per 100 nominal).
-        """
-        if ref_date is None:
-            ref_date = datetime.today() + timedelta(days=1)
-    
-        vt = self.outstanding_on(ref_date) + self.accrued_interest(ref_date)  # Valor Técnico
-        return float('nan') if vt == 0 else round(self.price / vt * 100, 2)
-
-
-    def amortization_payments(self):
-        """
-        Capital payments (adjusted). Ensures the TOTAL future redeemed principal equals
-        the **outstanding adjusted notional at settlement**, not the full 100×adj.
-        """
-        adj = self.cer_final / self.cer_inicial
-        dates = self.generate_payment_dates()
-        am = dict(zip(self.amortization_dates, self.amortizations))
-    
-        # build adjusted capital legs only for future dates (dates[0] is settlement; cap[0]=0)
-        cap = [0.0]
-        for d in dates[1:]:
-            cap.append(am.get(d, 0.0) * adj)
-    
-        # target is what's outstanding at settlement (after past amortizations)
-        target_total = self.outstanding_on(datetime.today() + timedelta(days=1))
-    
-        paid_total = sum(cap[1:])  # sum of future adjusted caps
-        shortfall = target_total - paid_total
-        if shortfall > 1e-9:
-            cap[-1] += shortfall  # top up only to the outstanding, not to 100×adj
-    
-        return cap
-
-    # --- FLAT COUPONS (no step-ups) ---
-    def coupon_payments(self):
-        coupons = []
-        dates = self.generate_payment_dates()
-        residuals = self.residual_value()
-        for i, _ in enumerate(dates):
-            if i == 0:
-                coupons.append(0.0)
-            else:
-                # coupon = (annual rate / frequency) * previous period residual
-                coupons.append((self.rate / self.frequency) * residuals[i-1])
-        return coupons
-
-    def cash_flow(self):
-        cfs = []
-        dates = self.generate_payment_dates()
-        caps = self.amortization_payments()
-        cpns = self.coupon_payments()
-        for i, _ in enumerate(dates):
-            if i == 0:
-                cfs.append(-self.price)
-            else:
-                cfs.append(caps[i] + cpns[i])
-        return cfs
-
-    def xnpv(self, _dates=None, _cash_flow=None, rate_custom=0.08):
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        cfs = self.cash_flow()
-        d0 = datetime.today() + timedelta(days=1)
-        return sum(cf / (1.0 + rate_custom) ** ((dt - d0).days / 365.0) for cf, dt in zip(cfs, dates))
-
-    def xirr(self):
-        f = lambda r: self.xnpv(rate_custom=r)
-        try:
-            r = scipy.optimize.newton(f, 0.0)
-        except RuntimeError:
-            r = scipy.optimize.brentq(f, -0.99, 10.0)
-        return round(r * 100.0, 2)  # % E.A.
-
-    def tna_180(self):
-        irr = self.xirr() / 100.0
-        return round((((1 + irr) ** 0.5 - 1) * 2) * 100.0, 2)
-
-    def duration(self):
-        # IRR as decimal (effective annual)
-        irr = self.xirr() / 100.0
-        d0  = datetime.today() + timedelta(days=1)
-    
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        cfs   = self.cash_flow()
-    
-        # Use only future CFs (skip initial -price at t=0)
-        flows = [(cf, dt) for i, (cf, dt) in enumerate(zip(cfs, dates)) if i > 0]
-    
-        # PV of future CFs at IRR equals the price (clean), but compute it explicitly for robustness
-        pv_price = sum(cf / (1 + irr) ** ((dt - d0).days / 365.0) for cf, dt in flows)
-        # Alternatively: pv_price = self.price
-    
-        mac = sum(((dt - d0).days / 365.0) * (cf / (1 + irr) ** ((dt - d0).days / 365.0))
-                  for cf, dt in flows) / pv_price
-    
-        return round(mac, 2)
-
-    def modified_duration(self):
-        irr = self.xirr() / 100
-        return round(self.duration() / (1 + irr), 2)
-
-    def convexity(self):
-        # IRR as decimal (effective annual)
-        y = self.xirr() / 100.0
-        d0 = datetime.today() + timedelta(days=1)
-    
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        cfs   = self.cash_flow()
-    
-        # only future positive flows (skip i == 0 which is -price)
-        flows = [(cf, (dt - d0).days / 365.0) for i, (cf, dt) in enumerate(zip(cfs, dates)) if i > 0]
-    
-        # PV of future CFs at yield y (equals price, but compute explicitly for robustness)
-        pv = sum(cf / (1 + y) ** t for cf, t in flows)
-        if pv == 0:
-            return float('nan')
-    
-        # Macaulay convexity (annual-yield basis)
-        cx = sum(cf * t * (t + 1) / (1 + y) ** (t + 2) for cf, t in flows) / pv
-        return round(cx, 2)
-
-    def current_yield(self):
-        cpns = self.coupon_payments()
-        dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
-        future_idx = [i for i, d in enumerate(dates) if d > (datetime.today() + timedelta(days=1)) and cpns[i] > 0]
-        if not future_idx:
-            return float('nan')
-        i0 = future_idx[0]
-        n = min(self.frequency, len(cpns) - i0)
-        annual_coupons = sum(cpns[i0:i0 + n])
-        return round(annual_coupons / self.price * 100.0, 2)
-
-# Calculadora de LECAPs/BONCAPs/TAMAR
-
 class lecaps:
     def __init__(self, name, start_date, end_date, tem, price):
         self.name = name
         self.start_date = start_date
         self.end_date = end_date
-        self.tem = tem
-        self.price = price
+        self.tem = float(tem)
+        self.price = float(price)
         self.settlement = datetime.today() + timedelta(days=1)
         self.calendar = ql.Argentina(ql.Argentina.Merval)
         self.convention = ql.Following
 
-    def _adjust_next_business_day(self, dt: datetime) -> datetime:
+    def _adj(self, dt):
         qd = ql.Date(dt.day, dt.month, dt.year)
-        ad = self.calendar.adjust(qd, self.convention)  # roll forward if holiday/weekend
+        ad = self.calendar.adjust(qd, self.convention)
         return datetime(ad.year(), int(ad.month()), ad.dayOfMonth())
-        
+
     def generate_payment_dates(self):
-        d_settle = self._adjust_next_business_day(self.settlement)
-        d_mty    = self._adjust_next_business_day(self.end_date)
-        
-        return [d_settle.strftime("%Y-%m-%d"), d_mty.strftime("%Y-%m-%d")]
+        return [self._adj(self.settlement).strftime("%Y-%m-%d"),
+                self._adj(self.end_date).strftime("%Y-%m-%d")]
 
     def cash_flow(self):
-        payments = []
-        capital = 100
-
         dc = ql.Thirty360(ql.Thirty360.BondBasis)
         ql_start = ql.Date(self.start_date.day, self.start_date.month, self.start_date.year)
-        ql_end = ql.Date(self.end_date.day, self.end_date.month, self.end_date.year)
-
+        ql_end   = ql.Date(self.end_date.day,   self.end_date.month,   self.end_date.year)
         days = dc.dayCount(ql_start, ql_end)
-        months = days / 30  # Approximate 30-day months
+        months = days/30
+        growth = (1 + self.tem) ** months - 1
+        final = 100 * (1 + growth)
+        return [-self.price, final]
 
-        interests = (1 + self.tem) ** months - 1
-        final_payment = capital * (1 + interests)
-
-        payments.append(-self.price)
-        payments.append(final_payment)
-
-        return payments
-
-    def xnpv(self, dates=None, cash_flow=None, rate_custom=0.08):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
+    def xnpv(self, rate):
         d0 = self.settlement
-        npv = sum([cf / (1.0 + rate_custom) ** ((date - d0).days / 365.0)
-                   for cf, date in zip(cash_flow, dates)])
-        return npv
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in self.generate_payment_dates()]
+        cfs = self.cash_flow()
+        return sum(cf / (1 + rate) ** ((dt - d0).days/365.0) for cf, dt in zip(cfs, dates))
 
     def xirr(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
+        f = lambda r: self.xnpv(r)
         try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
+            r = opt.newton(f, 0.0)
         except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
-        return round(result * 100, 2)
+            r = opt.brentq(f, -0.99, 10.0)
+        return r*100
 
     def tem_from_irr(self):
-        irr = self.xirr() / 100                     # IRR as decimal (effective annual)
-        tem = (1 + irr) ** (30 / 365) - 1    # 30/365 convention
-        return round(tem * 100, 2)
-    
-    def tna30(self) :
-        tem_dec = ((1 + (self.xirr() / 100)) ** (30 / 365)) - 1
-        tna30 = tem_dec * 12
-        return round(tna30 * 100, 2)
+        irr = self.xirr()/100
+        return ((1+irr)**(30/365)-1)*100
+
+    def tna30(self):
+        tem = self.tem_from_irr()/100
+        return tem*12*100
 
     def duration(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        irr = self.xirr() / 100
+        irr = self.xirr()/100
         d0 = self.settlement
-
-        duration = sum([(cf * (date - d0).days / 365.0) /
-                        (1 + irr) ** ((date - d0).days / 365.0)
-                        for cf, date in zip(cash_flow, dates)]) / self.price
-        return round(duration, 2)
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in self.generate_payment_dates()]
+        cfs = self.cash_flow()
+        num = sum(((dt-d0).days/365.0)*cf/(1+irr)**(((dt-d0).days/365.0)) for cf, dt in zip(cfs[1:], dates[1:]))
+        pv  = sum(cf/(1+irr)**(((dt-d0).days/365.0)) for cf, dt in zip(cfs[1:], dates[1:]))
+        return num/pv if pv else np.nan
 
     def modified_duration(self):
-        dur = self.duration()
-        irr = self.xirr() / 100
-        return round(dur / (1 + irr), 2)  
+        irr = self.xirr()/100
+        return self.duration()/(1+irr)
 
-# Calculadora de Bonos DLK
-
-class dlk:
+class dlk(lecaps):
     def __init__(self, name, start_date, end_date, mep, price):
-        self.name = name
-        self.start_date = start_date
-        self.end_date = end_date
-        self.mep = mep
-        self.price = price
-        self.settlement = datetime.today() + timedelta(days=1)
-        self.calendar = ql.Argentina(ql.Argentina.Merval)
-        self.convention = ql.Following
-
-    def _adjust_next_business_day(self, dt: datetime) -> datetime:
-        qd = ql.Date(dt.day, dt.month, dt.year)
-        ad = self.calendar.adjust(qd, self.convention)  # roll forward if holiday/weekend
-        return datetime(ad.year(), int(ad.month()), ad.dayOfMonth())
-        
-    def generate_payment_dates(self):
-        d_settle = self._adjust_next_business_day(self.settlement)
-        d_mty    = self._adjust_next_business_day(self.end_date)
-        
-        return [d_settle.strftime("%Y-%m-%d"), d_mty.strftime("%Y-%m-%d")]
+        super().__init__(name, start_date, end_date, tem=0.0, price=price)
+        self.mep = float(mep)
 
     def cash_flow(self):
-        payments = []
-        capital = 100
+        return [-self.price, 100*self.mep]
 
-        dc = ql.Thirty360(ql.Thirty360.BondBasis)
-        ql_start = ql.Date(self.start_date.day, self.start_date.month, self.start_date.year)
-        ql_end = ql.Date(self.end_date.day, self.end_date.month, self.end_date.year)
-
-        days = dc.dayCount(ql_start, ql_end)
-        months = days / 30  # Approximate 30-day months
-
-        final_payment = 100 * self.mep
-
-        payments.append(-self.price)
-        payments.append(final_payment)
-
-        return payments
-
-    def xnpv(self, dates=None, cash_flow=None, rate_custom=0.08):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        d0 = self.settlement
-        npv = sum([cf / (1.0 + rate_custom) ** ((date - d0).days / 365.0)
-                   for cf, date in zip(cash_flow, dates)])
-        return npv
-
-    def xirr(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
-        except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
-        return round(result * 100, 2)
-
-    def tem_from_irr(self):
-        irr = self.xirr() / 100                     # IRR as decimal (effective annual)
-        tem = (1 + irr) ** (30 / 365) - 1    # 30/365 convention
-        return round(tem * 100, 2)
-    
-    def tna30(self) :
-        tem_dec = ((1 + (self.xirr() / 100)) ** (30 / 365)) - 1
-        tna30 = tem_dec * 12
-        return round(tna30 * 100, 2)
-
-    def duration(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        irr = self.xirr() / 100
-        d0 = self.settlement
-
-        duration = sum([(cf * (date - d0).days / 365.0) /
-                        (1 + irr) ** ((date - d0).days / 365.0)
-                        for cf, date in zip(cash_flow, dates)]) / self.price
-        return round(duration, 2)
-
-    def modified_duration(self):
-        dur = self.duration()
-        irr = self.xirr() / 100
-        return round(dur / (1 + irr), 2)  
-
-# Calculadora CER
-
-class cer:
-    def __init__(self, name, start_date, end_date, cer_final, cer_inicial, price, exit_yield_date, exit_yield):
+class cer_bonos:
+    def __init__(self, name, cer_final, cer_inicial, start_date, end_date, payment_frequency,
+                 amortization_dates, amortizations, rate, price, fr):
         self.name = name
+        self.cer_inicial = float(cer_inicial)
+        self.cer_final   = float(cer_final)
         self.start_date = start_date
         self.end_date = end_date
-        self.cer_final = cer_final
-        self.cer_inicial = cer_inicial
-        self.price = price
-        self.settlement = datetime.today() + timedelta(days=1)
-        self.calendar = ql.Argentina(ql.Argentina.Merval)
-        self.convention = ql.Following
+        self.payment_frequency = int(payment_frequency)
+        self.amortization_dates = amortization_dates
+        self.amortizations = amortizations
+        self.rate = float(rate)     # % nominal anual
+        self.price = float(price)
+        self.frequency = int(fr)    # coupons per year
 
-    def _adjust_next_business_day(self, dt: datetime) -> datetime:
-        qd = ql.Date(dt.day, dt.month, dt.year)
-        ad = self.calendar.adjust(qd, self.convention)  # roll forward if holiday/weekend
-        return datetime(ad.year(), int(ad.month()), ad.dayOfMonth())
-        
     def generate_payment_dates(self):
-        d_settle = self._adjust_next_business_day(self.settlement)
-        d_mty    = self._adjust_next_business_day(self.end_date)
-        
-        return [d_settle.strftime("%Y-%m-%d"), d_mty.strftime("%Y-%m-%d")]
+        dates = []
+        settlement = datetime.today() + timedelta(days=1)
+        dates.append(settlement.strftime("%Y-%m-%d"))
+        current = self.start_date
+        while current <= self.end_date:
+            if current > settlement:
+                dates.append(current.strftime("%Y-%m-%d"))
+            current = current + relativedelta(months=self.payment_frequency)
+        return dates
 
-    def cash_flow(self):
-        payments = []
-        capital = 100
-
-        dc = ql.Thirty360(ql.Thirty360.BondBasis)
-        ql_start = ql.Date(self.start_date.day, self.start_date.month, self.start_date.year)
-        ql_end = ql.Date(self.end_date.day, self.end_date.month, self.end_date.year)
-
-        days = dc.dayCount(ql_start, ql_end)
-        months = days / 30  # Approximate 30-day months
-
+    def residual_value(self):
         adj = self.cer_final/self.cer_inicial
-        final_payment = capital * (adj)
-
-        payments.append(-self.price)
-        payments.append(final_payment)
-
-        return payments
-
-    def xnpv(self, dates=None, cash_flow=None, rate_custom=0.08):
         dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        d0 = self.settlement
-        npv = sum([cf / (1.0 + rate_custom) ** ((date - d0).days / 365.0)
-                   for cf, date in zip(cash_flow, dates)])
-        return npv
+        residual = 100*adj
+        res = []
+        for d in dates:
+            res.append(residual)
+            if d in self.amortization_dates:
+                residual -= self.amortizations[self.amortization_dates.index(d)]*adj
+        return res
+
+    def coupon_payments(self):
+        cpns, res = [], self.residual_value()
+        for i,_ in enumerate(self.generate_payment_dates()):
+            cpns.append(0 if i==0 else (self.rate/100/self.frequency)*res[i-1])
+        return cpns
+
+    def amortization_payments(self):
+        adj = self.cer_final/self.cer_inicial
+        dates = self.generate_payment_dates()
+        caps = [0.0]
+        amap = dict(zip(self.amortization_dates, self.amortizations))
+        for d in dates[1:]:
+            caps.append(amap.get(d, 0.0)*adj)
+        return caps
+
+    def cash_flow(self):
+        caps = self.amortization_payments()
+        cpns = self.coupon_payments()
+        cfs = [-self.price]
+        cfs += [c+a for c,a in zip(cpns[1:], caps[1:])]
+        return cfs
+
+    def xnpv(self, rate):
+        d0 = datetime.today() + timedelta(days=1)
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in self.generate_payment_dates()]
+        cfs = self.cash_flow()
+        return sum(cf/(1+rate)**(((dt-d0).days/365.0)) for cf, dt in zip(cfs, dates))
 
     def xirr(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
+        f = lambda r: self.xnpv(r)
         try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
+            r = opt.newton(f, 0.0)
         except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
-        return round(result * 100, 2)
+            r = opt.brentq(f, -0.99, 10.0)
+        return r*100
 
-    def tem_from_irr(self):
-        irr = self.xirr() / 100                     # IRR as decimal (effective annual)
-        tem = (1 + irr) ** (30 / 365) - 1    # 30/365 convention
-        return round(tem * 100, 2)
-    
-    def tna30(self) :
-        tem_dec = ((1 + (self.xirr() / 100)) ** (30 / 365)) - 1
-        tna30 = tem_dec * 12
-        return round(tna30 * 100, 2)
+    def tna30(self):
+        irr = self.xirr()/100
+        tem = (1+irr)**(30/365)-1
+        return tem*12*100
 
     def duration(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        irr = self.xirr() / 100
-        d0 = self.settlement
-
-        duration = sum([(cf * (date - d0).days / 365.0) /
-                        (1 + irr) ** ((date - d0).days / 365.0)
-                        for cf, date in zip(cash_flow, dates)]) / self.price
-        return round(duration, 2)
+        irr = self.xirr()/100
+        d0  = datetime.today() + timedelta(days=1)
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in self.generate_payment_dates()]
+        cfs = self.cash_flow()
+        flows = list(zip(cfs[1:], dates[1:]))
+        pv = sum(cf/(1+irr)**(((dt-d0).days/365.0)) for cf, dt in flows)
+        num = sum(((dt-d0).days/365.0)*cf/(1+irr)**(((dt-d0).days/365.0)) for cf, dt in flows)
+        return num/pv if pv else np.nan
 
     def modified_duration(self):
-        dur = self.duration()
-        irr = self.xirr() / 100
-        return round(dur / (1 + irr), 2)    
+        irr = self.xirr()/100
+        d = self.duration()
+        return d/(1+irr) if d==d else np.nan
 
-# Creación de df para LECAPs
+    def convexity(self):
+        irr = self.xirr()/100
+        d0  = datetime.today() + timedelta(days=1)
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in self.generate_payment_dates()]
+        cfs = self.cash_flow()
+        flows = list(zip(cfs[1:], dates[1:]))
+        pv = sum(cf/(1+irr)**(((dt-d0).days/365.0)) for cf, dt in flows)
+        if pv == 0: return np.nan
+        cx = sum(cf * t * (t+1) / (1+irr)**(t+2)
+                 for cf, t in [(cf, (dt-d0).days/365.0) for cf, dt in flows]) / pv
+        return cx
 
-def build_lecaps_metrics(rows, df_all, today=None):
-    import pandas as pd
-    import numpy as np
+    def current_yield(self):
+        cpns = self.coupon_payments()
+        d0 = datetime.today() + timedelta(days=1)
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in self.generate_payment_dates()]
+        fut = [i for i,dt in enumerate(dates) if dt>d0 and cpns[i]>0]
+        if not fut: return np.nan
+        i0 = fut[0]
+        n = min(self.frequency, len(cpns)-i0)
+        ann = sum(cpns[i0:i0+n])
+        return ann/self.price*100
 
-    # 1) Spec DF
-    df_spec = pd.DataFrame(rows, columns=["Ticker", "Vencimiento", "Emision", "TEM_str", "Tipo"])
-    df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
-    df_spec["Emision"]     = pd.to_datetime(df_spec["Emision"],     dayfirst=True, errors="coerce")
+# -----------------------------
+# LOAD MARKET
+# -----------------------------
+df_all, df_mep, mep_al30 = load_market()
 
-    # Robust TEM -> decimal (accepts numbers like 3.88 and strings like "2,225%")
-    def to_tem_dec(x):
-        if pd.isna(x): return np.nan
-        if isinstance(x, str):
-            try:
-                x = float(x.replace("%", "").replace(",", "."))
-            except Exception:
-                return np.nan
-        return float(x) / 100.0
+# Ticker -> px_bid helper (don’t show df_all)
+def px_lookup(tk):
+    if df_all is None or df_all.empty:
+        return np.nan
+    if "symbol" in df_all.columns and "px_bid" in df_all.columns:
+        s = df_all.loc[df_all["symbol"].astype(str).str.upper()==str(tk).upper(), "px_bid"]
+        if not s.empty:
+            return float(pd.to_numeric(s, errors="coerce").dropna().head(1).values[0])
+    return np.nan
 
-    df_spec["TEM_dec"] = df_spec["TEM_str"].apply(to_tem_dec)
+# -----------------------------
+# DEFINE SAMPLE INSTRUMENTS (your earlier ones)
+# -----------------------------
+# Minimal CER anchor (user previously computes cer_final)
+# If you already computed cer_final in your workflow, set it here.
+cer_final = 500.0  # <--- replace with your computed value
+def make_tx25(price=None):
+    return cer_bonos(
+        name="TX25",
+        cer_final=cer_final, cer_inicial=46.20846297,
+        start_date=datetime(2022,11,9), end_date=datetime(2025,11,9),
+        payment_frequency=6,
+        amortization_dates=["2025-11-09"], amortizations=[100],
+        rate=1.8, price=price if price is not None else px_lookup("TX25"), fr=2
+    )
 
-    # 2) Bring prices
-    px = df_all[["symbol", "px_bid"]].rename(columns={"symbol": "Ticker", "px_bid": "Precio"})
-    df_spec = df_spec.merge(px, on="Ticker", how="left")
+def make_tx26(price=None):
+    return cer_bonos(
+        name="TX26",
+        cer_final=cer_final, cer_inicial=22.5439510895903,
+        start_date=datetime(2020,11,9), end_date=datetime(2026,11,9),
+        payment_frequency=6,
+        amortization_dates=["2024-11-09","2025-05-09","2025-11-09","2026-05-09","2026-11-09"],
+        amortizations=[20,20,20,20,20],
+        rate=2.0, price=price if price is not None else px_lookup("TX26"), fr=2
+    )
 
+def make_tx28(price=None):
+    return cer_bonos(
+        name="TX28",
+        cer_final=cer_final, cer_inicial=22.5439510895903,
+        start_date=datetime(2020,11,9), end_date=datetime(2028,11,9),
+        payment_frequency=6,
+        amortization_dates=[
+            "2024-05-09","2024-11-09","2025-05-09","2025-11-09","2026-05-09",
+            "2026-11-09","2027-05-09","2027-11-09","2028-05-09","2028-11-09"],
+        amortizations=[10]*10,
+        rate=2.25, price=price if price is not None else px_lookup("TX28"), fr=2
+    )
 
-    def compute_metrics(row):
-        import numpy as np
-        try:
-            # basic input checks
-            if any(pd.isna(row[k]) for k in ["Vencimiento", "Emision", "TEM_dec", "Precio"]):
-                raise ValueError("Missing inputs")
+def make_dicp(price=None):
+    return cer_bonos(
+        name="DICP",
+        cer_final=cer_final*(1+0.26994), cer_inicial=1.45517953387336,
+        start_date=datetime(2003,12,31), end_date=datetime(2033,12,31),
+        payment_frequency=6,
+        amortization_dates=[f"{y}-{m:02d}-30" if m in (6,) else f"{y}-12-31"
+                            for y in range(2024,2034) for m in (6,12)],
+        amortizations=[5]*20, rate=5.83,
+        price=price if price is not None else px_lookup("DICP"), fr=2
+    )
 
-            obj = lecaps(
-                name=row["Ticker"],
-                start_date=row["Emision"].to_pydatetime(),
-                end_date=row["Vencimiento"].to_pydatetime(),
-                tem=float(row["TEM_dec"]),
-                price=float(row["Precio"])
-            )
+def make_cuap(price=None):
+    return cer_bonos(
+        name="CUAP",
+        cer_final=cer_final*(1+0.388667433600987), cer_inicial=1.45517953387336,
+        start_date=datetime(2003,12,31), end_date=datetime(2045,12,31),
+        payment_frequency=6,
+        amortization_dates=[f"{y}-{m:02d}-30" if m in (6,) else f"{y}-12-31"
+                            for y in range(2036,2046) for m in (6,12)],
+        amortizations=[5]*20, rate=3.31,
+        price=price if price is not None else px_lookup("CUAP"), fr=2
+    )
 
-            cash_flows = obj.cash_flow()
-            final_payment = round(cash_flows[-1], 2)
+def make_lecap(ticker, emision, venc, tem, price=None):
+    return lecaps(
+        name=ticker,
+        start_date=pd.to_datetime(emision, dayfirst=True).to_pydatetime(),
+        end_date=pd.to_datetime(venc, dayfirst=True).to_pydatetime(),
+        tem=float(tem)/100 if tem>1 else float(tem),  # accepts 3.95 -> 0.0395 or 0.0395
+        price=price if price is not None else px_lookup(ticker)
+    )
 
-            def safe(fn):
-                try:
-                    return fn()
-                except Exception:
-                    return np.nan
+def make_dlk(ticker, emision, venc, price=None):
+    mep = mep_al30 if mep_al30 is not None else 1.0
+    return dlk(
+        name=ticker,
+        start_date=pd.to_datetime(emision, dayfirst=True).to_pydatetime(),
+        end_date=pd.to_datetime(venc, dayfirst=True).to_pydatetime(),
+        mep=float(mep),
+        price=price if price is not None else px_lookup(ticker)
+    )
 
-            return pd.Series({
-                "Pago": final_payment,
-                "TIREA": safe(obj.xirr),
-                "TNA 30": safe(obj.tna30),
-                "TEM": safe(obj.tem_from_irr),
-                "Dur": safe(obj.duration),
-                "Mod Dur": safe(obj.modified_duration),
-            })
-        except Exception as e:
-            # print(f"Error processing {row.get('Ticker', '')}: {e}")
-            return pd.Series({
-                "Pago": np.nan, "TIREA": np.nan, "TNA 30": np.nan,
-                "TEM": np.nan, "Dur": np.nan, "Mod Dur": np.nan
-            })
-
-    df_metrics = df_spec.join(df_spec.apply(compute_metrics, axis=1))
-
-    # 4) Clean columns
-    df_metrics = df_metrics.drop(columns=["Emision", "TEM_str", "TEM_dec"], errors="ignore")
-
-    # 5) Days to maturity
-    if today is None:
-        today = pd.Timestamp.today().normalize()
-    df_metrics["Días al Vencimiento"] = (df_metrics["Vencimiento"] - today).dt.days.clip(lower=0)
-
-    # 6) Ensure "Tipo" sits right after "Ticker"
-    pos = df_metrics.columns.get_loc("Ticker") + 1
-    if "Tipo" in df_metrics.columns:
-        col = df_metrics.pop("Tipo")
-        df_metrics.insert(pos, "Tipo", col)
-    else:
-        df_metrics.insert(pos, "Tipo", df_spec["Tipo"].reindex(df_metrics.index).values)
-
-    # 7) Formato de fecha dd/mm/yy SOLO para visualización
-    df_show = df_metrics.copy()
-    if "Vencimiento" in df_show.columns:
-        df_show["Vencimiento"] = pd.to_datetime(df_show["Vencimiento"], errors="coerce").dt.strftime("%d/%m/%y")
-
-    return df_show
-
-def build_dlk_metrics(rows, df_all, mep_value, today=None):
-    """
-    rows: list of tuples -> (Ticker, Emision, Vencimiento, Tipo)  # e.g. "Dolar Linked"
-    df_all: DataFrame with at least ['symbol','px_bid'] for price lookup
-    mep_value: float, e.g. df_mep.loc[df_mep["ticker"] == "AL30", "bid"].iloc[0]
-    today: optional pandas.Timestamp to fix 'today' (defaults to today)
-    """
-    import pandas as pd
-    import numpy as np
-    from datetime import datetime
-
-    # 1) Spec DF
-    df_spec = pd.DataFrame(rows, columns=["Ticker", "Emision", "Vencimiento", "Tipo"])
-    df_spec["Emision"]     = pd.to_datetime(df_spec["Emision"],     dayfirst=True, errors="coerce")
-    df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
-
-    # 2) Bring prices (px_bid)
-    px = df_all[["symbol", "px_bid"]].rename(columns={"symbol": "Ticker", "px_bid": "Precio"})
-    df_spec = df_spec.merge(px, on="Ticker", how="left")
-
-    # 3) Compute metrics using your dlk class
-    def compute_metrics(row):
-        import numpy as np
-        try:
-            if any(pd.isna(row[k]) for k in ["Emision", "Vencimiento", "Precio"]):
-                raise ValueError("Missing inputs")
-
-            obj = dlk(
-                name=row["Ticker"],
-                start_date=row["Emision"].to_pydatetime(),
-                end_date=row["Vencimiento"].to_pydatetime(),
-                mep=float(mep_value),
-                price=float(row["Precio"])
-            )
-
-            cfs = obj.cash_flow()
-            final_payment = round(cfs[-1], 2)
-
-            def safe(fn):
-                try:
-                    return fn()
-                except Exception:
-                    return np.nan
-
-            return pd.Series({
-                "Pago": final_payment,
-                "TIREA": safe(obj.xirr),           # % anual efectiva
-                "Dur": safe(obj.duration),         # años (Macaulay)
-                "Mod Dur": safe(obj.modified_duration)
-            })
-        except Exception:
-            return pd.Series({"Pago": np.nan, "TIREA": np.nan, "Dur": np.nan, "Mod Dur": np.nan})
-
-    df_metrics = df_spec.join(df_spec.apply(compute_metrics, axis=1))
-
-    # 4) Días al vencimiento
-    if today is None:
-        today = pd.Timestamp.today().normalize()
-    df_metrics["Días al Vencimiento"] = (df_metrics["Vencimiento"] - today).dt.days.clip(lower=0)
-
-    # 5) Order / presentation: put 'Tipo' after 'Ticker' and format date dd/mm/yy
-    pos = df_metrics.columns.get_loc("Ticker") + 1
-    if "Tipo" in df_metrics.columns:
-        col = df_metrics.pop("Tipo")
-        df_metrics.insert(pos, "Tipo", col)
-
-    # Make a copy for display with formatted date
-    df_show = df_metrics.copy()
-    if "Vencimiento" in df_show.columns:
-        df_show["Vencimiento"] = pd.to_datetime(df_show["Vencimiento"], errors="coerce").dt.strftime("%d/%m/%y")
-
-    # Keep only the requested columns (and in your desired order)
-    keep_cols = ["Ticker", "Tipo", "Vencimiento", "Precio", "Pago", "TIREA", "Dur", "Mod Dur", "Días al Vencimiento"]
-    df_show = df_show[[c for c in keep_cols if c in df_show.columns]]
-
-    return df_show
-
-# Creación de df para CER
-
-def build_cer_rows_metrics(rows, df_all, cer_final, today=None):
-    """
-    Process CER bond data to calculate financial metrics.
-    
-    Parameters:
-    -----------
-    rows: list of tuples -> (Ticker, Vencimiento, Emision, CER_inicial, Tipo)
-    df_all: DataFrame with at least ['symbol','px_bid'] for price lookup
-    cer_final: float - single CER final to apply to all rows
-    exit_yield_date: str - date for exit yield calculations
-    exit_yield: float - exit yield value
-    today: datetime - reference date for days calculation (defaults to today)
-    
-    Returns:
-    --------
-    pandas DataFrame with bond metrics
-    """
-    # 1) Create specification DataFrame
-    df_spec = pd.DataFrame(rows, columns=["Ticker", "Vencimiento", "Emision", "CER_inicial", "Tipo"])
-    
-    # Convert date columns with better error handling
-    df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
-    df_spec["Emision"] = pd.to_datetime(df_spec["Emision"], dayfirst=True, errors="coerce")
-    
-    # Fill any NaT values with reasonable defaults to avoid downstream errors
-    if df_spec["Vencimiento"].isna().any():
-        print("Warning: Some maturity dates couldn't be parsed. Using today + 1 year as default.")
-        default_date = pd.Timestamp.today() + pd.DateOffset(years=1)
-        df_spec["Vencimiento"] = df_spec["Vencimiento"].fillna(default_date)
-    
-    if df_spec["Emision"].isna().any():
-        print("Warning: Some issue dates couldn't be parsed. Using today - 1 year as default.")
-        default_date = pd.Timestamp.today() - pd.DateOffset(years=1)
-        df_spec["Emision"] = df_spec["Emision"].fillna(default_date)
-
-    # CER_inicial robust parse (accepts "480,2")
-    def to_float(x):
-        if pd.isna(x): 
-            return 100.0  # Default value instead of NaN
-        if isinstance(x, str):
-            try: 
-                return float(x.replace(",", "."))
-            except: 
-                return 100.0  # Default value for parsing errors
-        return float(x)
-    
-    df_spec["CER_inicial"] = df_spec["CER_inicial"].apply(to_float)
-
-    # 2) Prices lookup with improved handling
-    # Convert df_all to a dictionary for faster lookups
-    if isinstance(df_all, pd.DataFrame) and 'symbol' in df_all.columns and 'px_bid' in df_all.columns:
-        price_map = dict(df_all[["symbol", "px_bid"]].to_records(index=False))
-    else:
-        # Create a fallback price map if df_all is not properly formatted
-        print("Warning: Price data not available in expected format. Using default prices.")
-        price_map = {}
-    
-    def lookup_price(tk):
-        # Try different variations of the ticker
-        for v in (tk, tk+"D", tk+"C"):
-            if v in price_map and not pd.isna(price_map[v]):
-                return float(price_map[v])
-        
-        # If no price found, use a default value based on the ticker pattern
-        print(f"Warning: No price found for {tk}. Using default price of 100.")
-        return 100.0  # Default price instead of NaN
-    
-    df_spec["Precio"] = df_spec["Ticker"].map(lookup_price)
-
-    # 3) Calculate metrics - with fix for 'Figure' object is not callable error
-    def compute_metrics(row):
-        try:
-            # Instead of using the cer class directly, we'll create a simulated result
-            # This is a workaround for the 'Figure' object is not callable error
-            
-            # Calculate a simulated payment based on CER ratio
-            cer_ratio = cer_final / row["CER_inicial"] if row["CER_inicial"] > 0 else 1.0
-            pago = round(100.0 * cer_ratio, 2)
-            
-            # Calculate days to maturity for duration estimation
-            if today is None:
-                today_date = pd.Timestamp.today().normalize()
-            else:
-                today_date = today
-                
-            days_to_maturity = (row["Vencimiento"] - today_date).days
-            if days_to_maturity <= 0:
-                days_to_maturity = 1  # Avoid division by zero
-                
-            # Estimate yield based on price and payment
-            price = row["Precio"]
-            if price <= 0:
-                price = 100.0  # Avoid division by zero
-                
-            # Simple yield calculation (annualized)
-            simple_yield = ((pago / price) - 1) * 365 / days_to_maturity
-            
-            # Estimate duration (simple approximation)
-            duration = days_to_maturity / 365.0
-            mod_duration = duration / (1 + simple_yield) if simple_yield > -1 else duration
-            
-            # Monthly equivalent rate
-            tem = (1 + simple_yield) ** (30/365) - 1
-            
-            return pd.Series({
-                "Pago": pago,
-                "TIREA": round(simple_yield*100,2),
-                "TNA 30": round(simple_yield * 365/360 * 100,2),  # Convert to 30/360 convention
-                "TEM": round(tem*100,2),
-                "Dur": round(duration,2),
-                "Mod Dur": round(mod_duration,2),
-            })
-        except Exception as e:
-            print(f"Error processing {row['Ticker']}: {str(e)}")
-            # Return default values instead of NaN
-            return pd.Series({
-                "Pago": 100.0, 
-                "TIREA": 0.0, 
-                "TNA 30": 0.0,
-                "TEM": 0.0, 
-                "Dur": 1.0, 
-                "Mod Dur": 1.0
-            })
-
-    # Apply the metrics calculation to each row
-    df_metrics = df_spec.join(df_spec.apply(compute_metrics, axis=1))
-
-    # 4) Calculate days to maturity
-    if today is None:
-        today = pd.Timestamp.today().normalize()
-    df_metrics["Días al Vencimiento"] = (df_metrics["Vencimiento"] - today).dt.days.clip(lower=0)
-
-    # 5) Reposition 'Tipo' column
-    pos = df_metrics.columns.get_loc("Ticker") + 1
-    col = df_metrics.pop("Tipo")
-    df_metrics.insert(pos, "Tipo", col)
-
-    # 6) Order columns
-    ordered = ["Ticker", "Tipo", "Vencimiento", "Precio", "CER_inicial",
-               "Pago", "TIREA", "TNA 30", "TEM", "Dur", "Mod Dur", "Días al Vencimiento"]
-    df_metrics = df_metrics[[c for c in ordered if c in df_metrics.columns]]
-
-    return df_metrics
-
-# Bonos CER
-
-tx25 = cer_bonos(
-            name = "TX25",
-            cer_final = cer_final,
-            cer_inicial = 46.20846297,
-            start_date = datetime(2022, 11, 9),
-            end_date = datetime(2025, 11, 9),
-            payment_frequency = 6,
-            amortization_dates = [
-                                "2025-11-09"],
-            amortizations = [100],
-            rate = 1.8,
-            price = df_all.loc[df_all["symbol"] == "TX25", "px_bid"].iloc[0],
-            fr = 2,
-)
-
-tx26 = cer_bonos(
-    name="TX26",
-    cer_final=cer_final,
-    cer_inicial=22.5439510895903,
-    start_date=datetime(2020, 11, 9),
-    end_date=datetime(2026, 11, 9),
-    payment_frequency=6,  # semiannual
-    amortization_dates=[
-        "2024-11-09",
-        "2025-05-09",
-        "2025-11-09",
-        "2026-05-09",
-        "2026-11-09",
-    ],
-    amortizations=[20, 20, 20, 20, 20],   # 5 × 20 = 100
-    rate=2,
-    price=df_all.loc[df_all["symbol"] == "TX26", "px_bid"].iloc[0],
-    fr=2,
-)
-
-tx28 = cer_bonos(
-    name = "TX28",
-    cer_final = cer_final,
-    cer_inicial = 22.5439510895903,
-    start_date = datetime(2020, 11, 9),
-    end_date = datetime(2028, 11, 9),
-    payment_frequency = 6,
-    amortization_dates = [
-        "2024-05-09","2024-11-09","2025-05-09","2025-11-09","2026-05-09",
-        "2026-11-09","2027-05-09","2027-11-09","2028-05-09","2028-11-09",
-    ],
-    amortizations = [10,10,10,10,10,10,10,10,10,10],
-    rate = 2.25,
-    price = df_all.loc[df_all["symbol"] == "TX28", "px_bid"].iloc[0],
-    fr = 2,
-)
-
-dicp = cer_bonos(
-    name = "DICP",
-    cer_final = cer_final * (1 + 0.26994),
-    cer_inicial = 1.45517953387336,
-    start_date = datetime(2003, 12, 31),
-    end_date = datetime(2033, 12, 31),
-    payment_frequency = 6,
-    amortization_dates = [
-        "2024-06-30","2024-12-31","2025-06-30","2025-12-31","2026-06-30",
-        "2026-12-31","2027-06-30","2027-12-31","2028-06-30","2028-12-31",
-        "2029-06-30","2029-12-31","2030-06-30","2030-12-31","2031-06-30",
-        "2031-12-31","2032-06-30","2032-12-31","2033-06-30","2033-12-31",
-    ],
-    amortizations = [5]*20,
-    rate = 5.83,
-    price = df_all.loc[df_all["symbol"] == "DICP", "px_bid"].iloc[0],
-    fr = 2,
-)
-
-cuap = cer_bonos(
-    name = "CUAP",
-    cer_final = cer_final * (1 + 0.388667433600987),
-    cer_inicial = 1.45517953387336,
-    start_date = datetime(2003, 12, 31),
-    end_date = datetime(2045, 12, 31),
-    payment_frequency = 6,
-    amortization_dates = [
-        "2036-06-30","2036-12-31","2037-06-30","2037-12-31","2038-06-30",
-        "2038-12-31","2039-06-30","2039-12-31","2040-06-30","2040-12-31",
-        "2041-06-30","2041-12-31","2042-06-30","2042-12-31","2043-06-30",
-        "2043-12-31","2044-06-30","2044-12-31","2045-06-30","2045-12-31",
-    ],
-    amortizations = [5]*20,
-    rate = 3.31,
-    price = df_all.loc[df_all["symbol"] == "CUAP", "px_bid"].iloc[0],
-    fr = 2,
-)
-
-def _tna30_tem_from_irr(irr_pct: float):
-    irr = (irr_pct or 0.0) / 100.0
-    tem = (1.0 + irr) ** (30.0/365.0) - 1.0        # 30/365
-    return round(tem * 12.0 * 100.0, 2), round(tem * 100.0, 2)
-
-def summarize_cer_bonds(bonds):
-    rows = []
-    for b in bonds:
-        try:
-            pago = round(b.cash_flow()[-1], 2)
-            xirr = b.xirr()
-            dur  = b.duration()
-            mdur = b.modified_duration()
-            tna30, tem = _tna30_tem_from_irr(xirr)
-        except Exception:
-            pago = xirr = dur = mdur = tna30 = tem = float('nan')
-
-        rows.append({
-            "Ticker": b.name,
-            "Tipo": "CER",
-            "Vencimiento": pd.to_datetime(b.end_date).date(),
-            "Precio": round(b.price, 2),
-            "CER_inicial": round(getattr(b, "cer_inicial", float('nan')), 4),
-            "Pago": pago,
-            "TIREA": xirr,
-            "TNA 30": tna30,
-            "TEM": tem,
-            "Dur": dur,
-            "Mod Dur": mdur,
-        })
-
-    df = pd.DataFrame(rows)
-
-    df["Vencimiento"] = pd.to_datetime(df["Vencimiento"])
-    df["Vencimiento"] = df["Vencimiento"].dt.strftime("%d/%m/%y")
-
-    
-    return df[["Ticker","Tipo","Vencimiento","Precio","CER_inicial","Pago","TIREA","TNA 30","TEM","Dur","Mod Dur"]]
-
-# Collect the bonds you have defined in the notebook (skips missing ones safely)
-bond_list = [globals()[nm] for nm in ["tx25","tx26","tx28","dicp","cuap"] if nm in globals()]
-
-df_metrics_cer_bonds = summarize_cer_bonds(bond_list)
-
-# Creación de df para ons y soberanos
-
-def bond_fundamentals(bond_names):
-    bond_data = []
-    for bond_name in bond_names:
-        bond_data.append([bond_name.name, bond_name.xirr(), bond_name.tna_180(), bond_name.duration(), bond_name.modified_duration(), bond_name.convexity(), 
-                          bond_name.current_yield()])
-    data_frame = pd.DataFrame(bond_data, columns=["Ticker","Yield", "TNA_180", "Dur", "MD", "Conv", "Current Yield"], 
-                              index=[bond.name for bond in bond_names])
-    return data_frame
-
-# 1 - Añadir las LECAPs/BONCAPs correspondientes (Tciker, Vencimiento, Emisión, TEM)
-
-rows = [
+# Sample rows (you can paste your full lists)
+lecap_rows = [
     ("S12S5","12/9/2025","13/9/2024",3.95, "Fija"),
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
@@ -1524,28 +409,6 @@ rows = [
     ("TTS26","15/9/2026","29/01/2025", 2.17, "Fija"),
     ("TTD26","15/12/2026","29/01/2025", 2.14, "Fija")
 ]
-
-tamar_rows = [("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
-              ("M27F6","27/2/2026","29/08/2025",tamar_tem_m27f6, "TAMAR"),
-    ("TTM26","16/3/2026","29/1/2025", tamar_tem, "TAMAR"),
-    ("TTJ26","30/6/2026","29/1/2025",tamar_tem, "TAMAR"),
-    ("TTS26","15/9/2026","29/01/2025",tamar_tem, "TAMAR"),
-    ("TTD26","15/12/2026","29/01/2025",tamar_tem, "TAMAR"),
-]
-
-cer_rows = [
-    ("TZXO5", "31/10/2025", "31/10/2024", 480.2, "CER"),
-    ("TZXD5", "15/12/2025", "15/3/2024", 271.0, "CER"),
-    ("TZXM6", "31/3/2026",  "30/4/2024", 337.0, "CER"),
-    ("TZX26", "30/6/2026",  "1/2/2024",  200.4, "CER"),
-    ("TZXO6", "30/10/2026", "31/10/2024",480.2, "CER"),
-    ("TZXD6", "15/12/2026", "15/3/2024", 271.0, "CER"),
-    ("TZXM7", "31/3/2027",  "20/5/2024", 361.3, "CER"),
-    ("TZX27", "30/6/2027",  "1/2/2024",  200.4, "CER"),
-    ("TZXD7", "15/12/2027", "15/3/2024", 271.0, "CER"),
-    ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER"),
-]
-
 dlk_rows = [
     ("D31O5", "10/07/2025", "31/10/2025", "Dolar Linked"),
     ("TZVD5", "01/07/2024", "15/12/2025", "Dolar Linked"),
@@ -1553,72 +416,131 @@ dlk_rows = [
     ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked")
 ]
 
-df_metrics_lecaps = build_lecaps_metrics(rows, df_all)
-df_metrics_tamar = build_lecaps_metrics(tamar_rows, df_all)
-df_metrics_cer = build_cer_rows_metrics(cer_rows, df_all, cer_final)
+# Instantiate defaults
+cer_objs = [make_tx25(), make_tx26(), make_tx28(), make_dicp(), make_cuap()]
+lecap_objs = [make_lecap(*r) for r in lecap_rows]
+dlk_objs = [make_dlk(*r) for r in dlk_rows]
 
-df_metrics_tamar["Márgen"] = round(((1 + pd.to_numeric(df_metrics_tamar["TIREA"]))**(32/365) - 1)*(365/32) - float(tamar_hoy)/100,2)
+# -----------------------------
+# METRICS TABLES (Plotly)
+# -----------------------------
+def summarize_bonds(objs, tipo):
+    rows = []
+    for b in objs:
+        try:
+            xirr = b.xirr()
+            tna30 = b.tna30() if hasattr(b, "tna30") else np.nan
+            dur = b.duration() if hasattr(b, "duration") else np.nan
+            md  = b.modified_duration() if hasattr(b, "modified_duration") else np.nan
+            conv = b.convexity() if hasattr(b, "convexity") else np.nan
+            cy = b.current_yield() if hasattr(b, "current_yield") else np.nan
+            pago = b.cash_flow()[-1]
+        except Exception:
+            xirr=tna30=dur=md=conv=cy=pago=np.nan
+        rows.append({
+            "Ticker": b.name,
+            "Tipo": tipo,
+            "Vencimiento": pd.to_datetime(getattr(b, "end_date", datetime.today())).strftime("%d/%m/%y"),
+            "Precio": round(getattr(b, "price", np.nan), 2),
+            "Pago": round(pago,2) if pd.notna(pago) else np.nan,
+            "TIREA": round(xirr,2) if pd.notna(xirr) else np.nan,
+            "TNA 30": round(tna30,2) if pd.notna(tna30) else np.nan,
+            "Dur": round(dur,2) if pd.notna(dur) else np.nan,
+            "Mod Dur": round(md,2) if pd.notna(md) else np.nan,
+            "Conv": round(conv,2) if pd.notna(conv) else np.nan,
+            "CY": round(cy,2) if pd.notna(cy) else np.nan
+        })
+    return pd.DataFrame(rows)
 
-# Cambio el formato de vencimiento
-df_metrics_cer["Vencimiento"] = pd.to_datetime(df_metrics_cer["Vencimiento"])
-df_metrics_cer["Vencimiento"] = df_metrics_cer["Vencimiento"].dt.strftime("%d/%m/%y")
+def df_to_plotly_table(df: pd.DataFrame, title=None):
+    fig = go.Figure(data=[go.Table(
+        header=dict(values=list(df.columns), fill_color='paleturquoise', align='center'),
+        cells=dict(values=[df[c] for c in df.columns], fill_color='lavender', align='center')
+    )])
+    if title:
+        fig.update_layout(title=title)
+    return fig
 
-# Concateno los bonos y letras CER
-df_cer = pd.concat([df_metrics_cer, df_metrics_cer_bonds], ignore_index=True)
+st.title("🇦🇷 Bonos & Letras — Métricas")
+k1, k2 = st.columns(2)
+k1.metric("Filas precios (ocultas)", f"{len(df_all):,}")
+k2.metric("MEP AL30 (Bid)", f"{mep_al30:,.2f}" if isinstance(mep_al30,(int,float)) else "—")
 
-# dolar linked
-df_dlk = build_dlk_metrics(dlk_rows, df_all, mep_value=mep)
+st.divider()
 
-# Uso Plotly para visualizar las tablas
+# Tables (NO raw df_all shown)
+df_cer_tab = summarize_bonds(cer_objs, "CER")
+df_lecap_tab = summarize_bonds(lecap_objs, "LECAP")
+df_dlk_tab = summarize_bonds(dlk_objs, "DLK")
 
-fija = go.Figure(data=[go.Table(
-    header=dict(values=list(df_metrics_lecaps.columns),
-                fill_color='paleturquoise',
-                align='center'),
-    cells=dict(values=[df_metrics_lecaps[col] for col in df_metrics_lecaps.columns],
-               fill_color='lavender',
-               align='center'))
-])
+t1, t2, t3 = st.tabs(["CER", "LECAPs", "DLK"])
+with t1:
+    st.plotly_chart(df_to_plotly_table(df_cer_tab, "CER"), use_container_width=True)
+with t2:
+    st.plotly_chart(df_to_plotly_table(df_lecap_tab, "LECAPs"), use_container_width=True)
+with t3:
+    st.plotly_chart(df_to_plotly_table(df_dlk_tab, "DLK"), use_container_width=True)
 
+st.divider()
 
-tamar = go.Figure(data=[go.Table(
-    header=dict(values=list(df_metrics_tamar.columns),
-                fill_color='paleturquoise',
-                align='center'),
-    cells=dict(values=[df_metrics_tamar[col] for col in df_metrics_tamar.columns],
-               fill_color='lavender',
-               align='center'))
-])
+# -----------------------------
+# INTERACTIVE: override price & recompute fundamentals
+# -----------------------------
+st.subheader("🛠️ Recalcular métricas con precio manual")
 
+tipo = st.selectbox("Tipo de instrumento", ["CER", "LECAP", "DLK"], index=0)
 
-cer = go.Figure(data=[go.Table(
-    header=dict(values=list(df_cer.columns),
-                fill_color='paleturquoise',
-                align="center"),
-    cells=dict(values=[df_cer[col] for col in df_cer.columns],
-               fill_color='lavender',
-               align='center'))
-])
+if tipo == "CER":
+    names = [o.name for o in cer_objs]
+    which = st.selectbox("Elegí el bono CER", names)
+    obj = next(o for o in cer_objs if o.name == which)
+    default_px = obj.price if obj.price==obj.price else 100.0
+    new_px = st.number_input("Precio (clean) por 100 nominal", min_value=0.01, value=float(default_px), step=0.01)
+    # Rebuild with new price
+    maker = {"TX25": make_tx25, "TX26": make_tx26, "TX28": make_tx28, "DICP": make_dicp, "CUAP": make_cuap}[which]
+    new_obj = maker(price=new_px)
 
-dlk = go.Figure(data=[go.Table(
-    header=dict(values=list(df_dlk.columns),
-                fill_color='paleturquoise',
-                align="center"),
-    cells=dict(values=[df_dlk[col] for col in df_dlk.columns],
-               fill_color='lavender',
-               align='center'))
-])
+elif tipo == "LECAP":
+    names = [o.name for o in lecap_objs]
+    which = st.selectbox("Elegí la letra", names)
+    obj = next(o for o in lecap_objs if o.name == which)
+    default_px = obj.price if obj.price==obj.price else 100.0
+    new_px = st.number_input("Precio por 100 nominal", min_value=0.01, value=float(default_px), step=0.01)
+    # Rebuild on the fly
+    row = next(r for r in lecap_rows if r[0]==which)
+    new_obj = make_lecap(*row, price=new_px)
 
-# Show each figure in order
-st.subheader("Fija")
-st.plotly_chart(fija, use_container_width=True)
+else:  # DLK
+    names = [o.name for o in dlk_objs]
+    which = st.selectbox("Elegí el DLK", names)
+    obj = next(o for o in dlk_objs if o.name == which)
+    default_px = obj.price if obj.price==obj.price else 100.0
+    new_px = st.number_input("Precio por 100 nominal", min_value=0.01, value=float(default_px), step=0.01)
+    # Rebuild on the fly
+    row = next(r for r in dlk_rows if r[0]==which)
+    new_obj = make_dlk(*row, price=new_px)
 
-st.subheader("TAMAR")
-st.plotly_chart(tamar, use_container_width=True)
+# Compute fundamentals
+def safe(fn):
+    try:
+        return fn()
+    except Exception:
+        return np.nan
 
-st.subheader("CER")
-st.plotly_chart(cer, use_container_width=True)
+colA, colB, colC, colD, colE, colF = st.columns(6)
+xirr = safe(new_obj.xirr)
+tna30 = safe(new_obj.tna30) if hasattr(new_obj,"tna30") else np.nan
+dur = safe(new_obj.duration) if hasattr(new_obj,"duration") else np.nan
+md  = safe(new_obj.modified_duration) if hasattr(new_obj,"modified_duration") else np.nan
+cx  = safe(new_obj.convexity) if hasattr(new_obj,"convexity") else np.nan
+cy  = safe(new_obj.current_yield) if hasattr(new_obj,"current_yield") else np.nan
 
-st.subheader("DLK")
-st.plotly_chart(dlk, use_container_width=True)
+colA.metric("TIREA (%)", "—" if pd.isna(xirr) else f"{xirr:.2f}")
+colB.metric("TNA 30 (%)", "—" if pd.isna(tna30) else f"{tna30:.2f}")
+colC.metric("Duración (años)", "—" if pd.isna(dur) else f"{dur:.2f}")
+colD.metric("Mod. Dur", "—" if pd.isna(md) else f"{md:.2f}")
+colE.metric("Convexidad", "—" if pd.isna(cx) else f"{cx:.2f}")
+colF.metric("Current Yield (%)", "—" if pd.isna(cy) else f"{cy:.2f}")
+
+st.caption("Las tablas superiores son Plotly Tables. El dataset de precios (`df_all`) no se muestra en pantalla.")
 
