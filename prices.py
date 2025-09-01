@@ -14,6 +14,23 @@ URLS = {
     "mep":   "https://data912.com/live/mep",
 }
 
+# UI labels you asked for
+LABELS = {"bonds": "Bonos", "notes": "Letras", "corps": "Obligaciones Negociables"}
+
+# Columns you want, in this order
+TARGET_ORDER = [
+    "Ticker",
+    "Cantidad (BID)",
+    "Precio (BID)",
+    "Cantidad (ASK)",
+    "Precio (ASK)",
+    "Volumen",
+    "Cantidad (Operaciones)",
+    "Último",
+    "Cambio de Precio",
+    "Tipo",
+]
+
 def to_df(payload: dict | list) -> pd.DataFrame:
     if isinstance(payload, dict):
         for key in ("data", "results", "items", "bonds", "notes"):
@@ -35,36 +52,103 @@ def fetch_json(url: str, timeout: int = 20) -> dict | list:
     except json.JSONDecodeError:
         return json.loads(r.text)
 
+def coalesce_col(df: pd.DataFrame, candidates: list[str]):
+    for c in candidates:
+        if c in df.columns:
+            return c
+        # also try case-insensitive
+        for col in df.columns:
+            if col.lower() == c.lower():
+                return col
+    return None
+
+def normalize_view(df_in: pd.DataFrame, tipo_label: str) -> pd.DataFrame:
+    """
+    Map a raw API dataframe to the requested 10 columns.
+    Tries multiple common field names to be robust.
+    """
+    if df_in is None or df_in.empty:
+        out = pd.DataFrame(columns=TARGET_ORDER)
+        return out
+
+    df = df_in.copy()
+
+    # Candidate names for each target field (try in order)
+    ticker_cands = ["ticker", "symbol", "isin", "nombre", "name", "desc", "description"]
+    bid_qty_cands = ["bid_qty", "bidQty", "bidQuantity", "cantidadBid", "cant_bid", "qty_bid", "qtyBid"]
+    bid_px_cands  = ["bid", "precioCompra", "bidPrice", "priceBid", "px_bid", "bestBid"]
+    ask_qty_cands = ["ask_qty", "askQty", "askQuantity", "cantidadAsk", "cant_ask", "qty_ask", "qtyAsk"]
+    ask_px_cands  = ["ask", "precioVenta", "askPrice", "priceAsk", "px_ask", "bestAsk"]
+    vol_cands     = ["volume", "vol", "volumen", "turnover"]
+    trades_cands  = ["trades", "operations", "cantidadOperaciones", "ops", "count", "numTrades"]
+    last_cands    = ["last", "ultimo", "lastPrice", "px_last", "price", "ltp"]
+    chg_cands     = ["change", "chg", "cambio", "pct_change", "changePct", "pctChange", "var", "variacion"]
+
+    # Resolve actual columns present
+    col_map = {
+        "Ticker": coalesce_col(df, ticker_cands),
+        "Cantidad (BID)": coalesce_col(df, bid_qty_cands),
+        "Precio (BID)": coalesce_col(df, bid_px_cands),
+        "Cantidad (ASK)": coalesce_col(df, ask_qty_cands),
+        "Precio (ASK)": coalesce_col(df, ask_px_cands),
+        "Volumen": coalesce_col(df, vol_cands),
+        "Cantidad (Operaciones)": coalesce_col(df, trades_cands),
+        "Último": coalesce_col(df, last_cands),
+        "Cambio de Precio": coalesce_col(df, chg_cands),
+    }
+
+    # Build output with safe defaults
+    out = pd.DataFrame()
+    for tgt, src in col_map.items():
+        if src is not None:
+            out[tgt] = df[src]
+        else:
+            # create empty if missing
+            out[tgt] = pd.Series([None] * len(df))
+
+    # Add Tipo label
+    out["Tipo"] = tipo_label
+
+    # Numeric clean-up on price/qty-like columns (best effort)
+    numeric_cols = [
+        "Cantidad (BID)", "Precio (BID)", "Cantidad (ASK)", "Precio (ASK)",
+        "Volumen", "Cantidad (Operaciones)", "Último", "Cambio de Precio"
+    ]
+    for c in numeric_cols:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    # Ensure order
+    out = out[TARGET_ORDER]
+
+    # Optional: Ticker as string
+    out["Ticker"] = out["Ticker"].astype(str)
+
+    return out
+
 @st.cache_data(show_spinner=False)
 def load_all(_cache_buster: int):
-    """
-    Returns: df_all, df_bonds, df_notes, df_corps, df_mep, mep_al30
-    _cache_buster is unused; it only forces cache invalidation periodically.
-    """
     data = {}
     for k, url in URLS.items():
         try:
             payload = fetch_json(url)
         except Exception as e:
-            st.warning(f"⚠️ Could not fetch `{k}`: {e}")
+            st.warning(f"⚠️ No se pudo obtener `{k}`: {e}")
             payload = []
         df = to_df(payload)
-        if k != "mep":
-            df["source"] = k
         data[k] = df
 
-    frames = [
-        data.get("bonds", pd.DataFrame()),
-        data.get("notes", pd.DataFrame()),
-        data.get("corps", pd.DataFrame()),
-    ]
-    df_all = (
-        pd.concat(frames, ignore_index=True, sort=False)
-        if any(len(f) for f in frames)
-        else pd.DataFrame()
-    )
+    # Normalize each into your display schema + tag "Tipo"
+    bonds_view = normalize_view(data.get("bonds"), LABELS["bonds"])
+    notes_view = normalize_view(data.get("notes"), LABELS["notes"])
+    corps_view = normalize_view(data.get("corps"), LABELS["corps"])
 
+    # Combined view
+    df_all = pd.concat([bonds_view, notes_view, corps_view], ignore_index=True)
+
+    # MEP raw (left as-is, separate tab)
     df_mep = data.get("mep", pd.DataFrame()).copy()
+
+    # Try to pull AL30 MEP bid
     mep_al30 = None
     if not df_mep.empty:
         ticker_col = "ticker" if "ticker" in df_mep.columns else (
@@ -76,31 +160,32 @@ def load_all(_cache_buster: int):
         if ticker_col and bid_col:
             try:
                 mask = df_mep[ticker_col].astype(str).str.upper().eq("AL30")
-                mep_al30 = df_mep.loc[mask, bid_col].iloc[0]
+                mep_al30 = pd.to_numeric(df_mep.loc[mask, bid_col], errors="coerce").dropna().iloc[0]
             except Exception:
                 mep_al30 = None
 
-    return df_all, data.get("bonds"), data.get("notes"), data.get("corps"), df_mep, mep_al30
+    return df_all, bonds_view, notes_view, corps_view, df_mep, mep_al30
 
-def filter_df(df: pd.DataFrame, sources: list[str], q: str) -> pd.DataFrame:
+def filter_df(df: pd.DataFrame, tipos: list[str], q: str) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=TARGET_ORDER)
     out = df.copy()
 
-    if "source" in out.columns and sources:
-        out = out[out["source"].isin(sources)]
+    # Filter by Tipo (Bonos/Letras/ON)
+    if tipos:
+        out = out[out["Tipo"].isin(tipos)]
 
+    # Text query over Ticker
     q = (q or "").strip().lower()
     if q:
-        # common text columns; fallback to any object dtype
-        cols = [c for c in out.columns if c.lower() in
-                ("symbol", "ticker", "desc", "description", "nombre", "isin")]
-        if not cols:
-            cols = [c for c in out.columns if out[c].dtype == "object"]
-        mask = pd.Series(False, index=out.index)
-        for c in cols:
-            mask |= out[c].astype(str).str.lower().str.contains(q, na=False)
+        mask = out["Ticker"].astype(str).str.lower().str.contains(q, na=False)
         out = out[mask]
+
+    # Keep only target columns, in order
+    missing = [c for c in TARGET_ORDER if c not in out.columns]
+    for c in missing:
+        out[c] = None
+    out = out[TARGET_ORDER]
 
     return out
 
@@ -115,81 +200,80 @@ def make_download(df: pd.DataFrame, label: str, filename: str):
             mime="text/csv"
         )
 
-# ---------------- UI ----------------
+# ============== UI ==============
 st.title("🇦🇷 ARG Fixed Income — Live Board")
 
 with st.sidebar:
-    st.header("Controls")
-    sources = st.multiselect(
-        "Data sources",
-        options=["bonds", "notes", "corps"],
-        default=["bonds", "notes", "corps"],
+    st.header("Controles")
+    # User-facing options renamed
+    opciones = [LABELS["bonds"], LABELS["notes"], LABELS["corps"]]
+    tipos_sel = st.multiselect(
+        "Tipo",
+        options=opciones,
+        default=opciones
     )
-    query = st.text_input("Search (ticker / symbol / ISIN / name)", value="", placeholder="e.g., AL30, GD35, YPF…")
-    cache_ttl = st.slider("Auto-refresh every (seconds)", 5, 300, 30,
-                          help="Data is re-fetched automatically every N seconds.")
+    query = st.text_input("Buscar (Ticker)", value="", placeholder="Ej.: AL30, GD35, YPFD…")
+    cache_ttl = st.slider("Auto-refrescar cada (segundos)", 5, 300, 30)
     col1, col2 = st.columns(2)
     with col1:
-        refresh = st.button("🔄 Refresh now")
+        refresh = st.button("🔄 Refrescar ahora")
     with col2:
-        wide = st.toggle("Wide mode", value=True)
+        wide = st.toggle("Modo ancho", value=True)
         st.session_state["_wide"] = wide
 
 if st.session_state.get("_wide", True):
     st.set_page_config(layout="wide")
 
-# manual refresh clears cache
 if refresh:
     load_all.clear()
 
-# periodic refresh: change cache key every `cache_ttl` seconds
 cache_buster = int(time.time() // cache_ttl)
 
-with st.spinner("Fetching live data…"):
-    df_all, df_bonds, df_notes, df_corps, df_mep, mep_al30 = load_all(cache_buster)
+with st.spinner("Cargando datos en vivo…"):
+    df_all, df_bonos, df_letras, df_ons, df_mep, mep_al30 = load_all(cache_buster)
 
 # KPIs
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Rows (All markets)", f"{len(df_all) if df_all is not None else 0:,}")
-k2.metric("Rows (MEP)", f"{len(df_mep) if df_mep is not None else 0:,}")
+k1.metric("Filas (Bonos/Letras/ON)", f"{len(df_all):,}")
+k2.metric("Filas (MEP)", f"{len(df_mep) if df_mep is not None else 0:,}")
 k3.metric("MEP AL30 (Bid)", f"{mep_al30:,.2f}" if isinstance(mep_al30, (int, float)) else "—")
-k4.metric("Last refresh (local)", time.strftime("%Y-%m-%d %H:%M:%S"))
+k4.metric("Última actualización", time.strftime("%Y-%m-%d %H:%M:%S"))
 
 st.divider()
 
-tab_all, tab_bonds, tab_notes, tab_corps, tab_mep = st.tabs(
-    ["Overview (All)", "Bonds", "Notes", "Corps", "MEP"]
+tab_all, tab_bonos, tab_letras, tab_ons, tab_mep = st.tabs(
+    ["Resumen (Todos)", "Bonos", "Letras", "Obligaciones Negociables", "MEP"]
 )
 
 with tab_all:
-    df_f = filter_df(df_all, sources, query)
-    st.caption(f"Showing {len(df_f):,} rows")
+    df_f = filter_df(df_all, tipos_sel, query)
+    st.caption(f"Mostrando {len(df_f):,} filas")
     st.dataframe(df_f, use_container_width=True, hide_index=True)
-    make_download(df_f, "⬇️ Download filtered (CSV)", "arg_all_filtered.csv")
+    make_download(df_f, "⬇️ Descargar (CSV)", "arg_todos.csv")
 
-with tab_bonds:
-    df_f = filter_df(df_bonds, ["bonds"] if "bonds" in sources else [], query)
-    st.caption(f"Showing {len(df_f):,} rows")
+with tab_bonos:
+    df_f = filter_df(df_bonos, [LABELS["bonds"]] if LABELS["bonds"] in tipos_sel else [], query)
+    st.caption(f"Mostrando {len(df_f):,} filas")
     st.dataframe(df_f, use_container_width=True, hide_index=True)
-    make_download(df_f, "⬇️ Download bonds (CSV)", "arg_bonds.csv")
+    make_download(df_f, "⬇️ Descargar Bonos (CSV)", "arg_bonos.csv")
 
-with tab_notes:
-    df_f = filter_df(df_notes, ["notes"] if "notes" in sources else [], query)
-    st.caption(f"Showing {len(df_f):,} rows")
+with tab_letras:
+    df_f = filter_df(df_letras, [LABELS["notes"]] if LABELS["notes"] in tipos_sel else [], query)
+    st.caption(f"Mostrando {len(df_f):,} filas")
     st.dataframe(df_f, use_container_width=True, hide_index=True)
-    make_download(df_f, "⬇️ Download notes (CSV)", "arg_notes.csv")
+    make_download(df_f, "⬇️ Descargar Letras (CSV)", "arg_letras.csv")
 
-with tab_corps:
-    df_f = filter_df(df_corps, ["corps"] if "corps" in sources else [], query)
-    st.caption(f"Showing {len(df_f):,} rows")
+with tab_ons:
+    df_f = filter_df(df_ons, [LABELS["corps"]] if LABELS["corps"] in tipos_sel else [], query)
+    st.caption(f"Mostrando {len(df_f):,} filas")
     st.dataframe(df_f, use_container_width=True, hide_index=True)
-    make_download(df_f, "⬇️ Download corps (CSV)", "arg_corps.csv")
+    make_download(df_f, "⬇️ Descargar ON (CSV)", "arg_on.csv")
 
 with tab_mep:
-    st.subheader("Raw MEP")
-    st.caption(f"Rows: {len(df_mep) if df_mep is not None else 0:,}")
+    st.subheader("MEP (raw)")
+    st.caption(f"Filas: {len(df_mep) if df_mep is not None else 0:,}")
     st.dataframe(df_mep, use_container_width=True, hide_index=True)
-    make_download(df_mep, "⬇️ Download mep (CSV)", "arg_mep.csv")
+    make_download(df_mep, "⬇️ Descargar MEP (CSV)", "arg_mep.csv")
 
     ticker_col = None
     if df_mep is not None and not df_mep.empty:
@@ -201,4 +285,3 @@ with tab_mep:
         if not al30.empty:
             st.markdown("**AL30 (MEP) snapshot**")
             st.dataframe(al30, use_container_width=True, hide_index=True)
-
