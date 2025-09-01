@@ -1,6 +1,3 @@
-pip install streamlit pandas requests
-streamlit run app.py
-
 # app.py
 import os
 import time
