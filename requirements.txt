@@ -1,1 +1,7 @@
 streamlit
+pandas
+requests
+plotly
+scipy
+quantlib-python
+python-dateutil
