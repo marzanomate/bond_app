@@ -1,4 +1,4 @@
-!pip install alphacast
+pip install alphacast
 pip install QuantLib-Python
 
 import streamlit as st
