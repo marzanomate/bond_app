@@ -98,7 +98,7 @@ mep = df_mep.loc[df_mep["ticker"] == "AL30", "bid"].iloc[0]
 cer    = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/30")
 
 # results es una lista, en la cual un elemento es detalle (ahí se encuentran los datos)
-data_cer = pd.DataFrame(js["results"][0]["detalle"])
+data_cer = pd.DataFrame(cer["results"][0]["detalle"])
 
 # Solo dejo fecha y valor
 data_cer = (
