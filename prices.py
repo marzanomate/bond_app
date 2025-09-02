@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import scipy.optimize
 import json
+import time
 from dateutil.relativedelta import relativedelta
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
