@@ -7,3 +7,4 @@ quantlib-python
 python-dateutil
 pip_system_certs
 matplotlib
+bcraapi
