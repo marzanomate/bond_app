@@ -24,6 +24,10 @@ from requests.exceptions import SSLError, RequestException
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+HEADERS = {
+    "Accept": "application/json, text/plain;q=0.9, */*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (StreamlitApp; +https://streamlit.io)"
+}
 
 # -----------------------------
 # CONFIGURACIÓN DE LA PÁGINA
@@ -40,22 +44,47 @@ url_corps = "https://data912.com/live/arg_corp"
 url_mep = "https://data912.com/live/mep"
 
 @st.cache_data(ttl=300)
-def fetch_json(url: str, timeout: int = 20):
-    try:
-        # 1) Normal request with explicit certifi verify
-        r = requests.get(url, timeout=timeout, verify=certifi.where())
-        r.raise_for_status()
-        return r.json()
-    except SSLError:
-        # 2) Fallback via r.jina.ai proxy (keeps HTTPS on our side; avoids server’s TLS chain)
-        proxy_url = f"https://r.jina.ai/http://{url.replace('https://', '').replace('http://', '')}"
-        r = requests.get(proxy_url, timeout=timeout, verify=certifi.where())
-        r.raise_for_status()
-        # r.jina.ai returns text; parse to JSON
-        return json.loads(r.text)
-    except RequestException as e:
-        st.error(f"Error fetching {url}: {e}")
-        st.stop()
+def fetch_json(url: str, timeout: int = 20, retries: int = 3, backoff: float = 0.7):
+    last_err = None
+    for i in range(retries):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=timeout, verify=certifi.where())
+            # if server error, retry
+            if r.status_code >= 500:
+                time.sleep(backoff * (i + 1)); continue
+            r.raise_for_status()
+
+            ct = (r.headers.get("content-type") or "").lower()
+            text = r.text.strip()
+
+            # If body empty → retry
+            if not text:
+                time.sleep(backoff * (i + 1)); continue
+
+            # If declared JSON → parse
+            if "json" in ct:
+                return r.json()
+
+            # If not declared JSON but looks like JSON → parse safely
+            if text.startswith("{") or text.startswith("["):
+                return json.loads(text)
+
+            # Not JSON → show excerpt and stop
+            st.error(f"Expected JSON from {url}, got content-type='{ct}'. "
+                     f"First 200 chars: {text[:200]}")
+            st.stop()
+        except (requests.exceptions.SSLError, requests.exceptions.Timeout) as e:
+            last_err = e
+            time.sleep(backoff * (i + 1))
+        except requests.exceptions.RequestException as e:
+            st.error(f"HTTP error from {url}: {e}")
+            st.stop()
+        except json.JSONDecodeError as e:
+            last_err = e
+            time.sleep(backoff * (i + 1))
+
+    st.error(f"Failed to fetch JSON from {url}: {last_err}")
+    st.stop()
 
 def to_df(payload):
     # Accept list or dict with a top-level list (e.g., "data", "results", "items", ...)
@@ -95,18 +124,12 @@ mep = df_mep.loc[df_mep["ticker"] == "AL30", "bid"].iloc[0]
 # Obtengo CER
 # -----------------------------
 
-cer    = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/30")
-
-# results es una lista, en la cual un elemento es detalle (ahí se encuentran los datos)
-data_cer = pd.DataFrame(cer["results"][0]["detalle"])
-
-# Solo dejo fecha y valor
-data_cer = (
-    data_cer[["fecha", "valor"]]
-    .assign(fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"))
-    .sort_values("fecha")
-    .reset_index(drop=True)
-)
+cer_json  = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/30")
+if not cer_json or "results" not in cer_json or not cer_json["results"]:
+    st.error("BCRA CER: empty payload or missing 'results'"); st.stop()
+data_cer = pd.DataFrame(cer_json["results"][0]["detalle"]).assign(
+    fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce")
+).sort_values("fecha").reset_index(drop=True)
 
 cal = ql.Argentina(ql.Argentina.Merval)
 qd = ql.Date.todaysDate() + 1
@@ -125,8 +148,13 @@ cer_final = row["valor"]
 # -----------------------------
 
 # --- fetch & tidy ---
-tamar  = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/44")
-data_tamar = pd.DataFrame(tamar["results"][0]["detalle"])
+tamar_json  = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/44")
+if not tamar_json or "results" not in tamar_json or not tamar_json["results"]:
+    st.error("BCRA TAMAR: empty payload or missing 'results'"); st.stop()
+data_tamar = pd.DataFrame(tamar_json["results"][0]["detalle"]).assign(
+    fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce")
+).sort_values("fecha").set_index("fecha").rename(columns={"valor":"TAMAR_pct_na"})
+
 df_tamar = (data_tamar
     .assign(fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"))
     .sort_values("fecha")
