@@ -19,6 +19,7 @@ import streamlit as st
 import os
 import certifi
 import pip_system_certs.wrapt_requests
+from requests.exceptions import SSLError, RequestException
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
@@ -38,13 +39,21 @@ url_corps = "https://data912.com/live/arg_corp"
 url_mep = "https://data912.com/live/mep"
 
 @st.cache_data(ttl=300)
-def fetch_json(url, timeout=20):
+def fetch_json(url: str, timeout: int = 20):
     try:
-        r = requests.get(url, timeout=timeout)  # uses patched certs + certifi
+        # 1) Normal request with explicit certifi verify
+        r = requests.get(url, timeout=timeout, verify=certifi.where())
         r.raise_for_status()
         return r.json()
-    except SSLError as e:
-        st.error(f"TLS error fetching {url}: {e}")
+    except SSLError:
+        # 2) Fallback via r.jina.ai proxy (keeps HTTPS on our side; avoids server’s TLS chain)
+        proxy_url = f"https://r.jina.ai/http://{url.replace('https://', '').replace('http://', '')}"
+        r = requests.get(proxy_url, timeout=timeout, verify=certifi.where())
+        r.raise_for_status()
+        # r.jina.ai returns text; parse to JSON
+        return json.loads(r.text)
+    except RequestException as e:
+        st.error(f"Error fetching {url}: {e}")
         st.stop()
 
 def to_df(payload):
@@ -85,12 +94,7 @@ mep = df_mep.loc[df_mep["ticker"] == "AL30", "bid"].iloc[0]
 # Obtengo CER
 # -----------------------------
 
-url_cer = "https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/30"
-
-# 2. API request que devuelve datos en formato JSON
-response_cer = requests.get(url_cer, timeout=20)
-response_cer.raise_for_status()
-js = response_cer.json()
+cer    = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/30")
 
 # results es una lista, en la cual un elemento es detalle (ahí se encuentran los datos)
 data_cer = pd.DataFrame(js["results"][0]["detalle"])
@@ -120,8 +124,7 @@ cer_final = row["valor"]
 # -----------------------------
 
 # --- fetch & tidy ---
-url_tamar = "https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/44"
-tamar = requests.get(url_tamar, timeout=20).json()
+tamar  = fetch_json("https://api.bcra.gob.ar/estadisticas/v4.0/monetarias/44")
 data_tamar = pd.DataFrame(tamar["results"][0]["detalle"])
 df_tamar = (data_tamar
     .assign(fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"))
