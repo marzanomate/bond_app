@@ -1,10 +1,10 @@
+requests>=2.32
+certifi
+pip-system-certs
 streamlit
 pandas
-requests
+numpy
 plotly
 scipy
-quantlib-python
+QuantLib
 python-dateutil
-pip-system-certs
-matplotlib
-bcraapi
