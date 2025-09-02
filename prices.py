@@ -37,10 +37,15 @@ url_notes = "https://data912.com/live/arg_notes"
 url_corps = "https://data912.com/live/arg_corp"
 url_mep = "https://data912.com/live/mep"
 
-def fetch_json(url):
-    r = requests.get(url, timeout=20)
-    r.raise_for_status()
-    return r.json()
+@st.cache_data(ttl=300)
+def fetch_json(url, timeout=20):
+    try:
+        r = requests.get(url, timeout=timeout)  # uses patched certs + certifi
+        r.raise_for_status()
+        return r.json()
+    except SSLError as e:
+        st.error(f"TLS error fetching {url}: {e}")
+        st.stop()
 
 def to_df(payload):
     # Accept list or dict with a top-level list (e.g., "data", "results", "items", ...)
