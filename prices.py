@@ -16,6 +16,12 @@ from datetime import date, datetime, timedelta
 import requests
 from bcraapi import estadisticascambiarias
 import streamlit as st
+import os
+import certifi
+import pip_system_certs.wrapt_requests
+
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
 # -----------------------------
 # CONFIGURACIÓN DE LA PÁGINA
