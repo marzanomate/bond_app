@@ -5,6 +5,6 @@ plotly
 scipy
 quantlib-python
 python-dateutil
-pip_system_certs
+pip-system-certs
 matplotlib
 bcraapi
