@@ -5,4 +5,4 @@ plotly
 scipy
 quantlib-python
 python-dateutil
-alphacast
+pip_system_certs
