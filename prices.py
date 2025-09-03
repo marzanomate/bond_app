@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+from pathlib import Path
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -30,7 +31,6 @@ class ons_pro:
         return d if isinstance(d, datetime) else datetime.strptime(d, "%Y-%m-%d")
 
     def outstanding_on(self, ref_date=None):
-        """Principal outstanding (per 100) after amortizations up to ref_date inclusive."""
         if ref_date is None:
             ref_date = datetime.today() + timedelta(days=1)
         ref_date = self._as_dt(ref_date)
@@ -39,17 +39,12 @@ class ons_pro:
         return max(0.0, 100.0 - paid)
 
     def generate_payment_dates(self):
-        """
-        Returns list of 'YYYY-MM-DD': [t_settlement, D1, D2, ..., end_date]
-        Built backwards from end_date in steps of payment_frequency (months).
-        Respects initial stub. Only future coupon dates (> settlement) are kept.
-        """
         settlement = datetime.today() + timedelta(days=1)
         back = []
         cur = self.end_date if isinstance(self.end_date, datetime) else datetime.strptime(self.end_date, "%Y-%m-%d")
         start = self.start_date if isinstance(self.start_date, datetime) else datetime.strptime(self.start_date, "%Y-%m-%d")
 
-        back.append(cur)  # always include maturity
+        back.append(cur)  # include maturity
         while True:
             prev = cur - relativedelta(months=self.payment_frequency)
             if prev <= start:
@@ -74,10 +69,6 @@ class ons_pro:
         return residual
 
     def accrued_interest(self, ref_date=None):
-        """
-        ACT/365F accrual using the real (stub-aware) coupon grid.
-        Coupon = (annual rate / frequency) * residual at period start.
-        """
         if ref_date is None:
             ref_date = datetime.today() + timedelta(days=1)
         ref_date = self._as_dt(ref_date)
@@ -89,7 +80,6 @@ class ons_pro:
         if not coup_dt:
             return 0.0
 
-        # next coupon after ref_date
         next_coupon = None
         for d in coup_dt:
             if d > ref_date:
@@ -100,7 +90,7 @@ class ons_pro:
 
         idx = coup_dt.index(next_coupon)
         if idx == 0:
-            period_start = self._as_dt(self.start_date)  # initial stub start
+            period_start = self._as_dt(self.start_date)  # initial stub
         else:
             period_start = coup_dt[idx - 1]
 
@@ -114,7 +104,7 @@ class ons_pro:
     def parity(self, ref_date=None):
         if ref_date is None:
             ref_date = datetime.today() + timedelta(days=1)
-        vt = self.outstanding_on(ref_date) + self.accrued_interest(ref_date)  # Valor Técnico
+        vt = self.outstanding_on(ref_date) + self.accrued_interest(ref_date)
         return float('nan') if vt == 0 else round(self.price / vt * 100, 2)
 
     def amortization_payments(self):
@@ -130,10 +120,7 @@ class ons_pro:
         dates = self.generate_payment_dates()
         residuals = self.residual_value()
         for i, _ in enumerate(dates):
-            if i == 0:
-                coupons.append(0.0)
-            else:
-                coupons.append((self.rate / self.frequency) * residuals[i - 1])
+            coupons.append(0.0 if i == 0 else (self.rate / self.frequency) * residuals[i - 1])
         return coupons
 
     def cash_flow(self):
@@ -142,10 +129,7 @@ class ons_pro:
         caps = self.amortization_payments()
         cpns = self.coupon_payments()
         for i, _ in enumerate(dates):
-            if i == 0:
-                cfs.append(-self.price)
-            else:
-                cfs.append(caps[i] + cpns[i])
+            cfs.append(-self.price if i == 0 else caps[i] + cpns[i])
         return cfs
 
     def xnpv(self, _dates=None, _cash_flow=None, rate_custom=0.08):
@@ -156,38 +140,27 @@ class ons_pro:
 
     def xirr(self):
         """Pure-Python XIRR via auto-bracket + bisection; returns % E.A."""
-        def f(r):
-            return self.xnpv(rate_custom=r)
-
+        def f(r): return self.xnpv(rate_custom=r)
         lows  = [-0.99, -0.50, -0.20, -0.10, 0.0]
         highs = [0.10, 0.20, 0.50, 1.0, 2.0, 5.0, 10.0]
-
         for lo in lows:
             flo = f(lo)
-            if np.isnan(flo):
-                continue
+            if np.isnan(flo): continue
             for hi in highs:
-                if hi <= lo:
-                    continue
+                if hi <= lo: continue
                 fhi = f(hi)
-                if np.isnan(fhi):
-                    continue
-                if flo == 0:
-                    return round(lo * 100.0, 2)
-                if fhi == 0:
-                    return round(hi * 100.0, 2)
+                if np.isnan(fhi): continue
+                if flo == 0:  return round(lo * 100.0, 2)
+                if fhi == 0:  return round(hi * 100.0, 2)
                 if flo * fhi < 0:
                     a, b = lo, hi
                     fa, fb = flo, fhi
                     for _ in range(100):
-                        m = 0.5 * (a + b)
-                        fm = f(m)
+                        m = 0.5 * (a + b); fm = f(m)
                         if abs(fm) < 1e-12 or (b - a) < 1e-10:
                             return round(m * 100.0, 2)
-                        if fa * fm <= 0:
-                            b, fb = m, fm
-                        else:
-                            a, fa = m, fm
+                        if fa * fm <= 0: b, fb = m, fm
+                        else: a, fa = m, fm
                     return round(0.5 * (a + b) * 100.0, 2)
         return float('nan')
 
@@ -218,8 +191,7 @@ class ons_pro:
         cfs   = self.cash_flow()
         flows = [(cf, (dt - d0).days / 365.0) for i, (cf, dt) in enumerate(zip(cfs, dates)) if i > 0]
         pv = sum(cf / (1 + y) ** t for cf, t in flows)
-        if pv == 0:
-            return float('nan')
+        if pv == 0: return float('nan')
         cx = sum(cf * t * (t + 1) / (1 + y) ** (t + 2) for cf, t in flows) / pv
         return round(cx, 2)
 
@@ -227,8 +199,7 @@ class ons_pro:
         cpns = self.coupon_payments()
         dates = [datetime.strptime(s, '%Y-%m-%d') for s in self.generate_payment_dates()]
         future_idx = [i for i, d in enumerate(dates) if d > (datetime.today() + timedelta(days=1)) and cpns[i] > 0]
-        if not future_idx:
-            return float('nan')
+        if not future_idx: return float('nan')
         i0 = future_idx[0]
         n = min(self.frequency, len(cpns) - i0)
         annual_coupons = sum(cpns[i0:i0 + n])
@@ -238,22 +209,18 @@ class ons_pro:
 # Helpers: parsing / normalization / loading
 # ===========================
 def parse_date_cell(s):
-    if pd.isna(s):
-        return None
-    if isinstance(s, datetime):
-        return s
+    if pd.isna(s): return None
+    if isinstance(s, datetime): return s
     s = str(s).strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            pass
+        try: return datetime.strptime(s, fmt)
+        except ValueError: pass
     return pd.to_datetime(s, dayfirst=True, errors="raise").to_pydatetime()
 
 def parse_date_list(cell):
     if cell is None or (isinstance(cell, float) and np.isnan(cell)) or (isinstance(cell, str) and cell.strip() == ""):
         return []
-    parts = str(cell).replace(",", "/").split(";")  # tolerate comma slips
+    parts = str(cell).replace(",", "/").split(";")
     out = []
     for p in parts:
         d = parse_date_cell(p)
@@ -261,21 +228,17 @@ def parse_date_list(cell):
     return out
 
 def parse_float_cell(x):
-    if pd.isna(x):
-        return np.nan
+    if pd.isna(x): return np.nan
     s = str(x).strip().replace("%", "")
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     else:
         s = s.replace(",", ".")
-    try:
-        return float(s)
-    except Exception:
-        return np.nan
+    try: return float(s)
+    except Exception: return np.nan
 
 def normalize_rate_to_percent(rate_raw):
-    if pd.isna(rate_raw):
-        return np.nan
+    if pd.isna(rate_raw): return np.nan
     r = float(rate_raw)
     return r * 100.0 if r < 1 else r
 
@@ -287,31 +250,25 @@ def parse_amorts(cell):
 
 def get_price_for_symbol(df_all, symbol, prefer="px_bid"):
     row = df_all.loc[df_all["symbol"] == symbol]
-    if row.empty:
-        return np.nan
+    if row.empty: return np.nan
     prefer_col = prefer if prefer in row.columns else None
     alt_col = "px_ask" if prefer == "px_bid" else "px_bid"
     alt_col = alt_col if alt_col in row.columns else None
-
-    if prefer_col and not pd.isna(row.iloc[0][prefer_col]):
-        return float(row.iloc[0][prefer_col])
-    if alt_col and not pd.isna(row.iloc[0][alt_col]):
-        return float(row.iloc[0][alt_col])
-
+    if prefer_col and not pd.isna(row.iloc[0][prefer_col]): return float(row.iloc[0][prefer_col])
+    if alt_col and not pd.isna(row.iloc[0][alt_col]):       return float(row.iloc[0][alt_col])
     for c in row.columns:
         if c != "symbol":
-            try:
-                return float(row.iloc[0][c])
-            except Exception:
-                continue
+            try: return float(row.iloc[0][c])
+            except Exception: continue
     return np.nan
 
-def load_ons_from_excel(path_xlsx, df_all, price_col_prefer="px_bid"):
+def load_ons_from_excel(path_or_buffer, df_all, price_col_prefer="px_bid"):
     """
-    Excel columns: name, empresa, curr, law, start_date, end_date,
-    payment_frequency, amortization_dates, amortizations, rate, fr
+    Accepts a file path or a BytesIO from st.file_uploader.
+    Required columns: name, empresa, curr, law, start_date, end_date,
+                      payment_frequency, amortization_dates, amortizations, rate, fr
     """
-    raw = pd.read_excel(path_xlsx, dtype=str)
+    raw = pd.read_excel(path_or_buffer, dtype=str)
 
     required_cols = [
         "name","empresa","curr","law","start_date","end_date",
@@ -330,7 +287,6 @@ def load_ons_from_excel(path_xlsx, df_all, price_col_prefer="px_bid"):
 
         start = parse_date_cell(r["start_date"])
         end   = parse_date_cell(r["end_date"])
-
         pay_freq = int(parse_float_cell(r["payment_frequency"]))
 
         am_dates = parse_date_list(r["amortization_dates"])
@@ -345,15 +301,12 @@ def load_ons_from_excel(path_xlsx, df_all, price_col_prefer="px_bid"):
 
         rate_raw = parse_float_cell(r["rate"])
         rate_pct = normalize_rate_to_percent(rate_raw)
-
         fr = int(parse_float_cell(r["fr"]))
-
         price = get_price_for_symbol(df_all, name, prefer=price_col_prefer)
 
         b = ons_pro(
             name=name, empresa=emp, curr=curr, law=law,
-            start_date=start, end_date=end,
-            payment_frequency=pay_freq,
+            start_date=start, end_date=end, payment_frequency=pay_freq,
             amortization_dates=am_dates, amortizations=am_amts,
             rate=rate_pct, price=price, fr=fr
         )
@@ -378,7 +331,6 @@ def bond_fundamentals_ons(bond_objs):
     cols = ["Ticker","Empresa","Moneda de Pago","Ley","Cupón","Precio",
             "Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]
     df = pd.DataFrame(rows, columns=cols)
-
     for c in ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["Cupón"] = df["Cupón"].round(4)
@@ -397,14 +349,21 @@ st.title("💼 ONs — Fundamentals")
 
 with st.sidebar:
     st.header("⚙️ Settings")
-    default_excel_path = r"C:\Users\mmarzano\Documents\Modelos - Calculadora\listado_ons.xlsx"
-    excel_path = st.text_input("Excel path (listado_ons.xlsx)", value=default_excel_path)
+
+    # 1) Excel source
+    st.markdown("**ONs spec Excel**")
+    excel_upload = st.file_uploader("Upload listado_ons.xlsx", type=["xlsx"])
+    default_rel = Path(__file__).parent / "data" / "listado_ons.xlsx"
+    excel_path_text = st.text_input("Or type a path (optional)", value=str(default_rel))
+
+    # 2) Price preference
     prefer_col = st.selectbox("Preferred price", options=["px_bid", "px_ask"], index=0)
 
-    st.caption("Optionally upload a prepared df_all (CSV/Parquet) instead of fetching endpoints.")
-    up_df_all = st.file_uploader("Upload df_all", type=["csv", "parquet"])
-
+    # 3) df_all source
+    st.markdown("---\n**Prices df_all**")
+    up_df_all = st.file_uploader("Upload df_all (CSV/Parquet)", type=["csv", "parquet"])
     do_fetch = st.checkbox("Fetch prices from data912 endpoints", value=True)
+
     reload_btn = st.button("🔄 Reload")
 
 @st.cache_data(show_spinner=False)
@@ -425,38 +384,23 @@ def fetch_df_all_from_endpoints():
     url_notes = "https://data912.com/live/arg_notes"
     url_corps = "https://data912.com/live/arg_corp"
 
-    data_bonds = fetch_json(url_bonds)
-    data_notes = fetch_json(url_notes)
-    data_corps = fetch_json(url_corps)
-
-    df_bonds = to_df(data_bonds)
-    df_notes = to_df(data_notes)
-    df_corps = to_df(data_corps)
-    df_bonds["source"] = "bonds"
-    df_notes["source"] = "notes"
-    df_corps["source"] = "corps"
+    df_bonds = to_df(fetch_json(url_bonds)); df_bonds["source"] = "bonds"
+    df_notes = to_df(fetch_json(url_notes)); df_notes["source"] = "notes"
+    df_corps = to_df(fetch_json(url_corps)); df_corps["source"] = "corps"
 
     df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
-
-    # normalize column names
     if "symbol" not in df_all.columns and "ticker" in df_all.columns:
         df_all = df_all.rename(columns={"ticker": "symbol"})
-    guess_map = {
-        "bid": "px_bid", "ask": "px_ask",
-        "px_bid_": "px_bid", "px_ask_": "px_ask",
-        "price_bid": "px_bid", "price_ask": "px_ask"
-    }
+    guess_map = {"bid":"px_bid","ask":"px_ask","px_bid_":"px_bid","px_ask_":"px_ask","price_bid":"px_bid","price_ask":"px_ask"}
     for c_old, c_new in guess_map.items():
         if c_old in df_all.columns and c_new not in df_all.columns:
             df_all = df_all.rename(columns={c_old: c_new})
-
     return df_all
 
 @st.cache_data(show_spinner=False)
-def load_everything(excel_path, df_all, prefer_col):
-    bonds = load_ons_from_excel(excel_path, df_all, price_col_prefer=prefer_col)
-    df_metrics = bond_fundamentals_ons(bonds)
-    return df_metrics
+def load_everything(excel_source, df_all, prefer_col):
+    bonds = load_ons_from_excel(excel_source, df_all, price_col_prefer=prefer_col)
+    return bond_fundamentals_ons(bonds)
 
 # Build df_all
 df_all = None
@@ -488,9 +432,27 @@ if reload_btn:
     fetch_df_all_from_endpoints.clear()
     load_everything.clear()
 
+# Decide Excel source: upload > valid typed path > default relative file
+excel_source = None
+if excel_upload is not None:
+    excel_source = excel_upload
+    status_msgs.append(f"📄 Using uploaded Excel: {excel_upload.name}")
+else:
+    typed = Path(excel_path_text) if excel_path_text else None
+    if typed and typed.exists():
+        excel_source = str(typed)
+        status_msgs.append(f"📄 Using Excel at: {typed}")
+    elif default_rel.exists():
+        excel_source = str(default_rel)
+        status_msgs.append(f"📄 Using default Excel at: {default_rel}")
+
+if excel_source is None:
+    st.error("❌ Provide the ONs Excel: upload it or give a valid path (tip: commit it under `data/listado_ons.xlsx`).")
+    st.stop()
+
 with st.spinner("Calculating metrics..."):
     try:
-        df_metrics = load_everything(excel_path, df_all, prefer_col)
+        df_metrics = load_everything(excel_source, df_all, prefer_col)
         status_msgs.append(f"✅ Metrics computed for {len(df_metrics):,} bonds.")
     except Exception as e:
         st.error(f"❌ Error computing metrics: {e}")
@@ -498,8 +460,7 @@ with st.spinner("Calculating metrics..."):
 
 with st.sidebar:
     st.divider()
-    for msg in status_msgs:
-        st.write(msg)
+    for msg in status_msgs: st.write(msg)
 
 # Filters
 st.subheader("Filters")
@@ -511,7 +472,7 @@ df_view = df_metrics[df_metrics["Empresa"].isin(sel_empresas)].reset_index(drop=
 # Display
 st.subheader("Metrics table")
 col_config = {
-    "Cupón": st.column_config.NumberColumn("Cupón (%)", help="Nominal annual rate", format="%.4f"),
+    "Cupón": st.column_config.NumberColumn("Cupón (%)", format="%.4f"),
     "Precio": st.column_config.NumberColumn("Precio", format="%.2f"),
     "Yield": st.column_config.NumberColumn("Yield (%)", format="%.2f"),
     "TNA_180": st.column_config.NumberColumn("TNA 180 (%)", format="%.2f"),
