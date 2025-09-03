@@ -67,26 +67,25 @@ class ons_pro:
         return [settlement.strftime("%Y-%m-%d")] + [d.strftime("%Y-%m-%d") for d in future_schedule]
 
     def residual_value(self):
-        residual, current = [], 100.0
-        for d in self.generate_payment_dates():
-            if d in self.amortization_dates:
-                idx = self.amortization_dates.index(d)
-                current -= self.amortizations[idx]
-            residual.append(current)
-        return residual
+        """Residual (per 100) en cada fecha de la grilla, contemplando amortizaciones previas."""
+        dates = [self._as_dt(s) for s in self.generate_payment_dates()]
+        return [self.outstanding_on(d) for d in dates]
 
     def accrued_interest(self, ref_date=None):
+        """
+        Interés corrido ACT/365F con base del INICIO de período (mismo criterio que coupon_payments).
+        """
         if ref_date is None:
             ref_date = datetime.today() + timedelta(days=1)
         ref_date = self._as_dt(ref_date)
-
+    
         dates_str = self.generate_payment_dates()
         all_dt = [datetime.strptime(s, "%Y-%m-%d") for s in dates_str]
-        coup_dt = all_dt[1:]  # exclude t0 (settlement)
-
+        coup_dt = all_dt[1:]  # fechas de cupón
+    
         if not coup_dt:
             return 0.0
-
+    
         next_coupon = None
         for d in coup_dt:
             if d > ref_date:
@@ -94,13 +93,16 @@ class ons_pro:
                 break
         if next_coupon is None:
             return 0.0
-
+    
         idx = coup_dt.index(next_coupon)
-        period_start = self._as_dt(self.start_date) if idx == 0 else coup_dt[idx - 1]
-
+        if idx == 0:
+            period_start = max(self._as_dt(self.start_date), next_coupon - relativedelta(months=self.payment_frequency))
+        else:
+            period_start = coup_dt[idx - 1]
+    
         residual_at_start = self.outstanding_on(period_start)
         full_coupon = (self.rate / self.frequency) * residual_at_start
-
+    
         total_days = max(1, (next_coupon - period_start).days)
         accrued_days = max(0, min((ref_date - period_start).days, total_days))
         return full_coupon * (accrued_days / total_days)
@@ -118,10 +120,24 @@ class ons_pro:
         return cap
 
     def coupon_payments(self):
-        cpns, residuals = [], self.residual_value()
-        for i, _ in enumerate(self.generate_payment_dates()):
-            cpns.append(0.0 if i == 0 else (self.rate / self.frequency) * residuals[i - 1])
-        return cpns
+        """
+        Cupón del período = (tasa anual / frecuencia) * residual al INICIO del período.
+        INICIO = cupón anterior; si no existe (primer futuro), uso max(start_date, next_coupon - payment_frequency meses).
+        """
+        dates = [self._as_dt(s) for s in self.generate_payment_dates()]
+        coupons = [0.0]  # t0 = settlement
+        coupon_dates = dates[1:]  # solo fechas de cupón
+    
+        for i, cdate in enumerate(coupon_dates):
+            if i == 0:
+                period_start = max(self._as_dt(self.start_date), cdate - relativedelta(months=self.payment_frequency))
+            else:
+                period_start = coupon_dates[i - 1]
+    
+            residual_at_start = self.outstanding_on(period_start)
+            coupons.append((self.rate / self.frequency) * residual_at_start)
+    
+        return coupons
 
     def cash_flow(self):
         cfs, caps, cpns = [], self.amortization_payments(), self.coupon_payments()
