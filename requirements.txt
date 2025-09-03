@@ -1,6 +1,7 @@
-streamlit
-matplotlib
-plotly
-scipy
-datetime
-timedelta
+streamlit>=1.37
+pandas>=2.2
+numpy>=1.26
+requests>=2.32
+python-dateutil>=2.9
+openpyxl>=3.1
+xlsxwriter>=3.2
