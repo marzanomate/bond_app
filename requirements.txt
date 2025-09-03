@@ -1,5 +1,4 @@
 streamlit
-Quant-lib
 matplotlib
 plotly
 scipy
