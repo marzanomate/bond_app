@@ -1,11 +1,5 @@
-requests>=2.32
-certifi
-pip-system-certs
 streamlit
-pandas
-numpy
+Quant-lib
+matplotlib
 plotly
 scipy
-QuantLib
-python-dateutil
-time
