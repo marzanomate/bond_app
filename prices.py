@@ -8,6 +8,10 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
+RAW_XLSX_URL = "https://raw.githubusercontent.com/<USER>/<REPO>/main/listado_ons.xlsx"
+
+
+
 # ===========================
 # ons_pro class (stub-aware) + pure-Python IRR
 # ===========================
