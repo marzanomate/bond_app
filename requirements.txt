@@ -3,3 +3,5 @@ Quant-lib
 matplotlib
 plotly
 scipy
+datetime
+timedelta
