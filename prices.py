@@ -429,13 +429,8 @@ def bond_flows_frame(b):
         "Flujo": cfs
     })
     
-@st.cache_data(show_spinner=False)
-excel_source = st.text_input(
-    "URL del Excel",
-    value=EXCEL_URL_DEFAULT,
-    help="Debe ser el enlace RAW al archivo .xlsx ...",
-    key="excel_url",
-)
+
+excel_source = EXCEL_URL_DEFAULT
 
 # =====================================
 # UI
