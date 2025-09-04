@@ -595,7 +595,7 @@ with colM4:
                 price=pman
             )
             df_one = bond_fundamentals_ons([b])
-            st.dataframe(df_one, use_container_width=True, height=120)
+            st.dataframe(df_one, use_container_width=True, height=120, hide_index = True)
         else:
             st.warning(f"No encontré el bono {tick2} para el cálculo manual.")
 
