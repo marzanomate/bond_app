@@ -446,10 +446,10 @@ with col_header[0]:
 
 
 # Carga de precios y excel
-with st.spinner("Cargando precios y Excel..."):
+with st.spinner("Cargando precios"):
     df_all = build_df_all()
     if df_all.empty:
-        st.error("No hay precios disponibles (data912).")
+        st.error("No hay precios disponibles")
         st.stop()
     try:
         excel_bytes = io.BytesIO(requests.get(excel_source, timeout=25).content)
@@ -480,7 +480,25 @@ mask = (
     df_metrics["Ley"].isin(sel_ley)
 )
 df_view = df_metrics.loc[mask].reset_index(drop=True)
-st.dataframe(df_view, use_container_width=True, height=420, hide_index=True)
+num_cols = ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]
+df_metrics[num_cols] = df_metrics[num_cols].apply(pd.to_numeric, errors="coerce")
+
+st.dataframe(
+    df_metrics,
+    hide_index=True,
+    use_container_width=True,
+    column_config={
+        "Cupón":          st.column_config.NumberColumn("Cupón",          format="%.4f"),
+        "Precio":         st.column_config.NumberColumn("Precio",         format="%.2f"),
+        "Yield":          st.column_config.NumberColumn("Yield",          format="%.2f"),
+        "TNA_180":        st.column_config.NumberColumn("TNA_180",        format="%.2f"),
+        "Dur":            st.column_config.NumberColumn("Dur",            format="%.2f"),
+        "MD":             st.column_config.NumberColumn("MD",             format="%.2f"),
+        "Conv":           st.column_config.NumberColumn("Conv",           format="%.2f"),
+        "Current Yield":  st.column_config.NumberColumn("Current Yield",  format="%.2f"),
+        "Paridad (%)":    st.column_config.NumberColumn("Paridad (%)",    format="%.2f"),
+    },
+)
 
 # Descargar CSV filtrado
 csv = df_view.to_csv(index=False).encode("utf-8")
