@@ -481,32 +481,25 @@ mask = (
 )
 df_view = df_metrics.loc[mask].reset_index(drop=True)
 
-def style_center(df: pd.DataFrame) -> pd.io.formats.style.Styler:
-    num_cols = ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]
-    df = df.copy()
-    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
+num_cols = ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]
+df_metrics[num_cols] = df_metrics[num_cols].apply(pd.to_numeric, errors="coerce")
 
-    fmt = {
-        "Cupón": "%.4f",
-        "Precio": "%.2f",
-        "Yield": "%.2f",
-        "TNA_180": "%.2f",
-        "Dur": "%.2f",
-        "MD": "%.2f",
-        "Conv": "%.2f",
-        "Current Yield": "%.2f",
-        "Paridad (%)": "%.2f",
-    }
-    sty = (
-        df.style
-          .hide(axis="index")
-          .format(fmt)
-          .set_properties(**{"text-align": "center"})
-          .set_table_styles([{"selector": "th", "props": [("text-align", "center")]}])
-    )
-    return sty
-
-st.table(style_center(df_metrics))
+st.dataframe(
+    df_metrics,
+    hide_index=True,
+    use_container_width=True,
+    column_config={
+        "Cupón":          st.column_config.NumberColumn("Cupón",          format="%.4f"),
+        "Precio":         st.column_config.NumberColumn("Precio",         format="%.2f"),
+        "Yield":          st.column_config.NumberColumn("Yield",          format="%.2f"),
+        "TNA_180":        st.column_config.NumberColumn("TNA_180",        format="%.2f"),
+        "Dur":            st.column_config.NumberColumn("Dur",            format="%.2f"),
+        "MD":             st.column_config.NumberColumn("MD",             format="%.2f"),
+        "Conv":           st.column_config.NumberColumn("Conv",           format="%.2f"),
+        "Current Yield":  st.column_config.NumberColumn("Current Yield",  format="%.2f"),
+        "Paridad (%)":    st.column_config.NumberColumn("Paridad (%)",    format="%.2f"),
+    },
+)
 
 # Descargar CSV filtrado
 csv = df_view.to_csv(index=False).encode("utf-8")
