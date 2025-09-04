@@ -550,7 +550,7 @@ st.markdown("---")
 # =========================
 # Métricas con precio manual
 # =========================
-st.subheader("Calculadora de métricas (precio manual)")
+st.subheader("Calculadora de métricas")
 colM1, colM2, colM3, colM4 = st.columns([2, 1.2, 1.2, 3])
 
 # Fila de etiquetas para alinear visualmente
