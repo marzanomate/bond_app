@@ -432,7 +432,7 @@ def bond_flows_frame(b):
 # =====================================
 # UI
 # =====================================
-st.title("📈 Calculadora ONs (px_ask)")
+st.title("📈 Obligaciones Negociables")
 
 # Entrada de Excel RAW (sin sidebar de “datos de mercado”)
 with st.expander("Fuente de datos (Excel RAW en GitHub)"):
