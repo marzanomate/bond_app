@@ -429,11 +429,6 @@ def bond_flows_frame(b):
         "Flujo": cfs
     })
 
-# =====================================
-# UI
-# =====================================
-st.title("📈 Obligaciones Negociables")
-
 excel_source = st.text_input(
     "URL del Excel",
     value=EXCEL_URL_DEFAULT,
@@ -441,10 +436,15 @@ excel_source = st.text_input(
     key="excel_url",
 )
 
+# =====================================
+# UI
+# =====================================
+st.title("📈 Obligaciones Negociables")
+
 # Botón actualizar precios
 col_header = st.columns([1, 1, 6])
 with col_header[0]:
-    if st.button("🔄 Actualizar precios", type="primary", help="Refresca precios de data912"):
+    if st.button("🔄 Actualizar precios", type="primary", help="Refresca precios de data912", key="refresh_prices"):
         st.cache_data.clear()
         st.rerun()
 
@@ -470,13 +470,13 @@ with st.spinner("Cargando precios y Excel..."):
 fc = st.columns(3)
 with fc[0]:
     emp_opts = sorted(df_metrics["Empresa"].dropna().unique().tolist())
-    sel_emp = st.multiselect("Empresa", emp_opts, default=emp_opts)
+    sel_emp = st.multiselect("Empresa", emp_opts, default=emp_opts, key="filter_emp")
 with fc[1]:
     mon_opts = sorted(df_metrics["Moneda de Pago"].dropna().unique().tolist())
-    sel_mon = st.multiselect("Moneda de Pago", mon_opts, default=mon_opts)
+    sel_mon = st.multiselect("Moneda de Pago", mon_opts, default=mon_opts, key="filter_mon")
 with fc[2]:
     ley_opts = sorted(df_metrics["Ley"].dropna().unique().tolist())
-    sel_ley = st.multiselect("Ley", ley_opts, default=ley_opts)
+    sel_ley = st.multiselect("Ley", ley_opts, default=ley_opts, key="filter_ley")
 
 mask = (
     df_metrics["Empresa"].isin(sel_emp) &
@@ -499,17 +499,25 @@ colA, colB = st.columns([2, 3])
 with colA:
     st.subheader("Flujos")
     tickers = ["(ninguno)"] + df_view["Ticker"].dropna().unique().tolist()
-    pick = st.selectbox("Ticker", tickers, index=0)
-
-    mode = st.radio("Modo de cálculo", ["Por nominales (VN)", "Por monto / precio manual"], horizontal=False)
-
+    pick = st.selectbox("Ticker", tickers, index=0, key="flow_ticker")
+    
+    mode = st.radio(
+        "Modo de cálculo",
+        ["Por nominales (VN)", "Por monto / precio manual"],
+        horizontal=False,
+        key="flow_mode",
+    )
+    
     if mode == "Por nominales (VN)":
-        vn = st.number_input("Nominales (VN)", min_value=0.0, value=100.0, step=100.0, help="Base de la clase: flujos por 100 nominal. Se escala: VN/100")
+        vn = st.number_input("Nominales (VN)", min_value=0.0, value=100.0, step=100.0, key="vn_input")
         precio_manual = None
         monto = None
     else:
-        monto = st.number_input("Monto a invertir", min_value=0.0, value=10000.0, step=1000.0)
-        precio_manual = st.number_input("Precio manual (por 100 nominal, clean)", min_value=0.0001, value=100.0, step=0.5)
+        monto = st.number_input("Monto a invertir", min_value=0.0, value=10000.0, step=1000.0, key="monto_input")
+        precio_manual = st.number_input(
+            "Precio manual (por 100 nominal, clean)",
+            min_value=0.0001, value=100.0, step=0.5, key="precio_manual_flows"
+        )
         vn = None
 
 with colB:
