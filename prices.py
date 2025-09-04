@@ -434,22 +434,13 @@ def bond_flows_frame(b):
 # =====================================
 st.title("📈 Obligaciones Negociables")
 
-# Entrada de Excel RAW (sin sidebar de “datos de mercado”)
-with st.expander("Fuente de datos (Excel RAW en GitHub)"):
-    excel_source = st.text_input(
-        "URL del Excel",
-        value=EXCEL_URL_DEFAULT,
-        help="Debe ser el enlace RAW al archivo .xlsx con las columnas: name, empresa, curr, law, start_date, end_date, payment_frequency, amortization_dates, amortizations, rate"
-    )
-
 # Botón actualizar precios
 col_header = st.columns([1, 1, 6])
 with col_header[0]:
     if st.button("🔄 Actualizar precios", type="primary", help="Refresca precios de data912"):
         st.cache_data.clear()
         st.rerun()
-with col_header[1]:
-    st.caption("El tablero usa **px_ask** como precio preferido (no modificable).")
+
 
 # Carga de precios y excel
 with st.spinner("Cargando precios y Excel..."):
