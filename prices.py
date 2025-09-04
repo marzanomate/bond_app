@@ -362,7 +362,7 @@ def bond_fundamentals_ons(bond_objs):
         df[c] = df[c].round(2)
     for c in ["Dur","MD","Conv"]:
         df[c] = df[c].round(2)
-    return df
+    return df.reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
 def load_ons_from_excel(path_or_bytes, df_all, price_col_prefer="px_ask"):
@@ -480,7 +480,7 @@ mask = (
     df_metrics["Ley"].isin(sel_ley)
 )
 df_view = df_metrics.loc[mask].reset_index(drop=True)
-st.dataframe(df_view, use_container_width=True, height=420)
+st.dataframe(df_view, use_container_width=True, height=420, hide_index=True)
 
 # Descargar CSV filtrado
 csv = df_view.to_csv(index=False).encode("utf-8")
