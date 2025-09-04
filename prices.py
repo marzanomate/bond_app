@@ -482,22 +482,25 @@ mask = (
 df_view = df_metrics.loc[mask].reset_index(drop=True)
 
 num_cols = ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]
-df_metrics[num_cols] = df_metrics[num_cols].apply(pd.to_numeric, errors="coerce")
+
+dfv = df_metrics.copy()
+for c in num_cols:
+    dfv[c] = pd.to_numeric(dfv[c], errors="coerce")  # garantiza dtype float
 
 st.dataframe(
-    df_metrics,
+    dfv,
     hide_index=True,
     use_container_width=True,
     column_config={
-        "Cupón":          st.column_config.NumberColumn("Cupón",          format="%.4f"),
-        "Precio":         st.column_config.NumberColumn("Precio",         format="%.2f"),
-        "Yield":          st.column_config.NumberColumn("Yield",          format="%.2f"),
-        "TNA_180":        st.column_config.NumberColumn("TNA_180",        format="%.2f"),
-        "Dur":            st.column_config.NumberColumn("Dur",            format="%.2f"),
-        "MD":             st.column_config.NumberColumn("MD",             format="%.2f"),
-        "Conv":           st.column_config.NumberColumn("Conv",           format="%.2f"),
-        "Current Yield":  st.column_config.NumberColumn("Current Yield",  format="%.2f"),
-        "Paridad (%)":    st.column_config.NumberColumn("Paridad (%)",    format="%.2f"),
+        "Cupón":         st.column_config.NumberColumn("Cupón",         format="%.4f"),
+        "Precio":        st.column_config.NumberColumn("Precio",        format="%.2f"),
+        "Yield":         st.column_config.NumberColumn("Yield",         format="%.2f"),
+        "TNA_180":       st.column_config.NumberColumn("TNA_180",       format="%.2f"),
+        "Dur":           st.column_config.NumberColumn("Dur",           format="%.2f"),
+        "MD":            st.column_config.NumberColumn("MD",            format="%.2f"),
+        "Conv":          st.column_config.NumberColumn("Conv",          format="%.2f"),
+        "Current Yield": st.column_config.NumberColumn("Current Yield", format="%.2f"),
+        "Paridad (%)":   st.column_config.NumberColumn("Paridad (%)",   format="%.2f"),
     },
 )
 
