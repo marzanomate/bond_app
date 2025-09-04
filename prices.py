@@ -553,14 +553,33 @@ st.markdown("---")
 st.subheader("Calculadora de métricas (precio manual)")
 colM1, colM2, colM3, colM4 = st.columns([2, 1.2, 1.2, 3])
 
+# Fila de etiquetas para alinear visualmente
+with colM1: st.markdown("**Ticker**")
+with colM2: st.markdown("**Precio manual**")
+with colM3: st.markdown("** **")  # espacio (non-breaking) para ocupar el alto de la etiqueta
+with colM4: st.markdown("**Resultado**")
+
+# Widgets con labels colapsadas para mantener la línea
 with colM1:
-    tick2 = st.selectbox("Ticker", ["(ninguno)"] + df_metrics["Ticker"].dropna().unique().tolist(), index=0)
+    tick2 = st.selectbox(
+        label="Ticker",
+        options=["(ninguno)"] + df_metrics["Ticker"].dropna().unique().tolist(),
+        index=0,
+        key="manual_ticker",
+        label_visibility="collapsed",
+    )
 
 with colM2:
-    pman = st.number_input("Precio manual", min_value=0.0, value=100.0, step=0.5)
+    pman = st.number_input(
+        label="Precio manual",
+        min_value=0.0, value=100.0, step=0.5,
+        key="manual_price",
+        label_visibility="collapsed",
+    )
 
 with colM3:
-    go_btn = st.button("Calcular métricas")
+    # Botón rojo (primary) alineado en la misma fila
+    go_btn = st.button("Calcular métricas", key="calc_metrics_btn", type="primary", use_container_width=True)
 
 with colM4:
     if go_btn and tick2 and tick2 != "(ninguno)":
@@ -572,7 +591,8 @@ with colM4:
                 name=b0.name, empresa=b0.empresa, curr=b0.curr, law=b0.law,
                 start_date=b0.start_date, end_date=b0.end_date, payment_frequency=b0.payment_frequency,
                 amortization_dates=b0.amortization_dates, amortizations=b0.amortizations,
-                rate=b0.rate*100.0, price=pman  # rate pasa como % a la __init__
+                rate=b0.rate*100.0,  # __init__ recibe % nominal anual
+                price=pman
             )
             df_one = bond_fundamentals_ons([b])
             st.dataframe(df_one, use_container_width=True, height=120)
