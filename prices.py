@@ -434,6 +434,13 @@ def bond_flows_frame(b):
 # =====================================
 st.title("📈 Obligaciones Negociables")
 
+excel_source = st.text_input(
+    "URL del Excel",
+    value=EXCEL_URL_DEFAULT,
+    help="Debe ser el enlace RAW al archivo .xlsx ...",
+    key="excel_url",
+)
+
 # Botón actualizar precios
 col_header = st.columns([1, 1, 6])
 with col_header[0]:
