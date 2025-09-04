@@ -1,30 +1,26 @@
-
 # app.py
 import re
 import io
-import json
 import numpy as np
 import pandas as pd
+import requests
+import streamlit as st
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
-import requests
-import streamlit as st
-
-# ===============================
+# =====================================
 # Config
-# ===============================
+# =====================================
 st.set_page_config(page_title="Calculadora ONs", layout="wide")
 
 EXCEL_URL_DEFAULT = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
 URL_BONDS = "https://data912.com/live/arg_bonds"
 URL_NOTES = "https://data912.com/live/arg_notes"
 URL_CORPS = "https://data912.com/live/arg_corp"
-# Si más adelante querés MEP, podés sumarlo, pero para precios de ONs usamos corps/bonds/notes
 
-# ===============================
-# Clase de ON (tu versión, robustecida)
-# ===============================
+# =====================================
+# Clase de ON (sin 'frequency' explícito)
+# =====================================
 class ons_pro:
     def __init__(self, name, empresa, curr, law, start_date, end_date, payment_frequency,
                  amortization_dates, amortizations, rate, price):
@@ -34,23 +30,21 @@ class ons_pro:
         self.law = law
         self.start_date = start_date
         self.end_date = end_date
-        self.payment_frequency = int(payment_frequency)  # meses entre cupones
+        self.payment_frequency = int(payment_frequency)  # meses
         if self.payment_frequency <= 0:
             raise ValueError(f"{name}: payment_frequency debe ser > 0")
-        self.amortization_dates = amortization_dates  # ["YYYY-MM-DD", ...]
-        self.amortizations = amortizations            # montos por 100 nominal
-        self.rate = float(rate) / 100.0               # % nominal anual -> decimal
-        self.price = float(price)                     # precio clean por 100 nominal
+        self.amortization_dates = amortization_dates     # YYYY-MM-DD (str)
+        self.amortizations = amortizations               # por 100 nominal
+        self.rate = float(rate) / 100.0                  # % nominal anual -> decimal
+        self.price = float(price)                        # clean por 100 nominal
 
     def _freq(self):
-        # cupones por año
-        return max(1, int(round(12 / self.payment_frequency)))
+        return max(1, int(round(12 / self.payment_frequency)))  # cupones/año
 
     def _as_dt(self, d):
         return d if isinstance(d, datetime) else datetime.strptime(d, "%Y-%m-%d")
 
     def outstanding_on(self, ref_date=None):
-        """Principal pendiente (por 100) luego de amortizaciones ≤ ref_date."""
         if ref_date is None:
             ref_date = datetime.today() + timedelta(days=1)
         ref_date = self._as_dt(ref_date)
@@ -59,24 +53,17 @@ class ons_pro:
         return max(0.0, 100.0 - paid)
 
     def generate_payment_dates(self):
-        """
-        Lista de strings 'YYYY-MM-DD': [settlement, d1, d2, ..., end_date]
-        Armado hacia atrás desde end_date con saltos de payment_frequency.
-        Se filtran fechas ≤ settlement (salvo el propio settlement t0).
-        """
         settlement = datetime.today() + timedelta(days=1)
         back = []
         cur = self._as_dt(self.end_date)
         start = self._as_dt(self.start_date)
-
-        back.append(cur)  # siempre maturity
+        back.append(cur)  # maturity
         while True:
             prev = cur - relativedelta(months=self.payment_frequency)
             if prev <= start:
                 break
             back.append(prev)
             cur = prev
-
         schedule = sorted(back)
         future_schedule = [d for d in schedule if d > settlement]
         return [settlement.strftime("%Y-%m-%d")] + [d.strftime("%Y-%m-%d") for d in future_schedule]
@@ -110,7 +97,7 @@ class ons_pro:
         if ref_date is None:
             ref_date = datetime.today() + timedelta(days=1)
         vt = self.outstanding_on(ref_date) + self.accrued_interest(ref_date)
-        return float('nan') if vt == 0 else round(self.price / vt * 100, 2)
+        return float('nan') if vt == 0 else round(self.price / vt * 100.0, 2)
 
     def amortization_payments(self):
         cap = []
@@ -150,16 +137,16 @@ class ons_pro:
                    for cf, dt in zip(cfs, dates))
 
     def xirr(self):
-        # Pure Python auto-bracketing + bisección (evita dependencia SciPy)
+        # bisección con auto-bracketing (evita SciPy)
         def f(r): return self.xnpv(rate_custom=r)
         lows  = [-0.99, -0.50, -0.20, -0.10, 0.0]
         highs = [0.10, 0.20, 0.50, 1.0, 2.0, 5.0, 10.0]
         for lo in lows:
             flo = f(lo)
-            if np.isnan(flo): 
+            if np.isnan(flo):
                 continue
             for hi in highs:
-                if hi <= lo: 
+                if hi <= lo:
                     continue
                 fhi = f(hi)
                 if np.isnan(fhi):
@@ -171,10 +158,10 @@ class ons_pro:
                 if flo * fhi < 0:
                     a, b = lo, hi
                     fa, fb = flo, fhi
-                    for _ in range(100):
+                    for _ in range(120):
                         m = 0.5 * (a + b)
                         fm = f(m)
-                        if abs(fm) < 1e-12 or (b - a) < 1e-10:
+                        if abs(fm) < 1e-12 or (b - a) < 1e-12:
                             return round(m * 100.0, 2)
                         if fa * fm <= 0:
                             b, fb = m, fm
@@ -236,19 +223,18 @@ class ons_pro:
         annual_coupons = sum(cpns[i0:i0 + n])
         return round(annual_coupons / self.price * 100.0, 2)
 
-# ===============================
-# Helpers de parseo Excel / precios
-# ===============================
+# =====================================
+# Parseo y precios
+# =====================================
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def parse_date_cell(s):
-    """Acepta 'dd/mm/aaaa', 'aaaa-mm-dd', con o sin hora. Devuelve datetime."""
     if pd.isna(s):
         return None
     if isinstance(s, (datetime, pd.Timestamp)):
         return pd.Timestamp(s).to_pydatetime()
     s = str(s).strip().replace("\u00A0", " ")
-    token = s.split("T")[0].split()[0]  # si viene con hora, me quedo con la fecha
+    token = s.split("T")[0].split()[0]
     if ISO_DATE_RE.match(token):
         return datetime.strptime(token, "%Y-%m-%d")
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
@@ -259,7 +245,6 @@ def parse_date_cell(s):
     return pd.to_datetime(token, dayfirst=True, errors="raise").to_pydatetime()
 
 def parse_date_list(cell):
-    """'8/12/2024;8/12/2025' -> ['2024-12-08','2025-12-08'] ; vacío -> []"""
     if cell is None or (isinstance(cell, float) and np.isnan(cell)) or (isinstance(cell, str) and cell.strip() == ""):
         return []
     parts = str(cell).replace(",", "/").split(";")
@@ -270,7 +255,6 @@ def parse_date_list(cell):
     return out
 
 def parse_float_cell(x):
-    """'0,0875'->0.0875 ; '8.75'->8.75 ; ' 9,5 % '->9.5"""
     if pd.isna(x):
         return np.nan
     s = str(x).strip().replace("%", "")
@@ -284,14 +268,12 @@ def parse_float_cell(x):
         return np.nan
 
 def normalize_rate_to_percent(r):
-    """Si r<1 asumo decimal y lo llevo a % (0.0875 -> 8.75)."""
     if pd.isna(r):
         return np.nan
     r = float(r)
     return r*100.0 if r < 1 else r
 
 def parse_amorts(cell):
-    """'33;33;34'->[33.0,33.0,34.0]; '100'->[100.0]; vacío->[]"""
     if cell is None or (isinstance(cell, float) and np.isnan(cell)) or (isinstance(cell, str) and cell.strip() == ""):
         return []
     return [parse_float_cell(p) for p in str(cell).split(";")]
@@ -303,7 +285,6 @@ def fetch_json(url):
     return r.json()
 
 def to_df(payload):
-    # Acepta list o dict con lista top-level ("data","results","items","bonds","notes")
     if isinstance(payload, dict):
         for key in ("data", "results", "items", "bonds", "notes"):
             if key in payload and isinstance(payload[key], list):
@@ -312,7 +293,6 @@ def to_df(payload):
     return pd.json_normalize(payload)
 
 def harmonize_prices(df):
-    """Estandariza columnas a ['symbol','px_bid','px_ask'] si existen."""
     rename_map = {}
     cols = {c.lower(): c for c in df.columns}
     if "ticker" in cols and "symbol" not in df.columns:
@@ -322,7 +302,6 @@ def harmonize_prices(df):
     if "ask" in cols and "px_ask" not in df.columns:
         rename_map[cols["ask"]] = "px_ask"
     out = df.rename(columns=rename_map)
-    # garantizar columnas aunque vacías
     for c in ["symbol", "px_bid", "px_ask"]:
         if c not in out.columns:
             out[c] = np.nan
@@ -330,13 +309,9 @@ def harmonize_prices(df):
 
 @st.cache_data(show_spinner=False)
 def build_df_all():
-    try:
-        bonds = to_df(fetch_json(URL_BONDS))
-        notes = to_df(fetch_json(URL_NOTES))
-        corps = to_df(fetch_json(URL_CORPS))
-    except Exception as e:
-        st.error(f"❌ No pude traer precios de data912: {e}")
-        return pd.DataFrame(columns=["symbol","px_bid","px_ask"])
+    bonds = to_df(fetch_json(URL_BONDS))
+    notes = to_df(fetch_json(URL_NOTES))
+    corps = to_df(fetch_json(URL_CORPS))
     dfs = []
     for d in [bonds, notes, corps]:
         if not d.empty:
@@ -344,13 +319,11 @@ def build_df_all():
     if not dfs:
         return pd.DataFrame(columns=["symbol","px_bid","px_ask"])
     df_all = pd.concat(dfs, ignore_index=True, sort=False).drop_duplicates(subset=["symbol"])
-    # aseguramos números
     for c in ["px_bid","px_ask"]:
         df_all[c] = pd.to_numeric(df_all[c], errors="coerce")
     return df_all
 
 def get_price_for_symbol(df_all, symbol, prefer="px_ask"):
-    """Obtiene precio preferido (px_ask fijo) o fallback a px_bid si falta."""
     row = df_all.loc[df_all["symbol"] == symbol]
     if row.empty:
         raise KeyError(f"No encontré {symbol} en df_all['symbol']")
@@ -361,9 +334,9 @@ def get_price_for_symbol(df_all, symbol, prefer="px_ask"):
         return float(row.iloc[0][alt])
     raise KeyError(f"{symbol}: no hay {prefer} ni {alt} con precio válido")
 
-# ===============================
+# =====================================
 # Loader Excel -> objetos + métricas
-# ===============================
+# =====================================
 def bond_fundamentals_ons(bond_objs):
     rows = []
     for b in bond_objs:
@@ -380,7 +353,7 @@ def bond_fundamentals_ons(bond_objs):
     cols = ["Ticker","Empresa","Moneda de Pago","Ley","Cupón","Precio",
             "Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]
     df = pd.DataFrame(rows, columns=cols)
-    # Redondeos agradables
+    # redondeos
     for c in ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     df["Cupón"] = df["Cupón"].round(4)
@@ -401,40 +374,45 @@ def load_ons_from_excel(path_or_bytes, df_all, price_col_prefer="px_ask"):
         raise ValueError(f"Faltan columnas en el Excel: {missing}")
 
     bonds = []
+    errors = []
     for _, r in raw.iterrows():
-        name  = str(r["name"]).strip()
-        emp   = str(r["empresa"]).strip()
-        curr  = str(r["curr"]).strip()
-        law   = str(r["law"]).strip()
+        try:
+            name  = str(r["name"]).strip()
+            emp   = str(r["empresa"]).strip()
+            curr  = str(r["curr"]).strip()
+            law   = str(r["law"]).strip()
+            start = parse_date_cell(r["start_date"])
+            end   = parse_date_cell(r["end_date"])
 
-        start = parse_date_cell(r["start_date"])
-        end   = parse_date_cell(r["end_date"])
+            pay_freq_raw = parse_float_cell(r["payment_frequency"])
+            if pd.isna(pay_freq_raw) or pay_freq_raw <= 0:
+                raise ValueError(f"{name}: payment_frequency inválido -> {r['payment_frequency']}")
+            pay_freq = int(round(pay_freq_raw))
 
-        pay_freq_raw = parse_float_cell(r["payment_frequency"])
-        if pd.isna(pay_freq_raw) or pay_freq_raw <= 0:
-            raise ValueError(f"{name}: payment_frequency inválido -> {r['payment_frequency']}")
-        pay_freq = int(round(pay_freq_raw))
+            am_dates = parse_date_list(r["amortization_dates"])
+            am_amts  = parse_amorts(r["amortizations"])
+            if len(am_dates) != len(am_amts):
+                if len(am_dates) == 1 and len(am_amts) == 0:
+                    am_amts = [100.0]
+                elif len(am_dates) == 0 and len(am_amts) == 1:
+                    am_dates = [end.strftime("%Y-%m-%d")]
+                else:
+                    raise ValueError(f"{name}: inconsistencia amortizaciones {am_dates} vs {am_amts}")
 
-        am_dates = parse_date_list(r["amortization_dates"])
-        am_amts  = parse_amorts(r["amortizations"])
-        if len(am_dates) != len(am_amts):
-            if len(am_dates) == 1 and len(am_amts) == 0:
-                am_amts = [100.0]
-            elif len(am_dates) == 0 and len(am_amts) == 1:
-                am_dates = [end.strftime("%Y-%m-%d")]
-            else:
-                raise ValueError(f"{name}: inconsistencia amortizaciones {am_dates} vs {am_amts}")
+            rate_pct = normalize_rate_to_percent(parse_float_cell(r["rate"]))
+            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer)
 
-        rate_pct = normalize_rate_to_percent(parse_float_cell(r["rate"]))
-        price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer)
-
-        b = ons_pro(
-            name=name, empresa=emp, curr=curr, law=law,
-            start_date=start, end_date=end, payment_frequency=pay_freq,
-            amortization_dates=am_dates, amortizations=am_amts,
-            rate=rate_pct, price=price
-        )
-        bonds.append(b)
+            b = ons_pro(
+                name=name, empresa=emp, curr=curr, law=law,
+                start_date=start, end_date=end, payment_frequency=pay_freq,
+                amortization_dates=am_dates, amortizations=am_amts,
+                rate=rate_pct, price=price
+            )
+            bonds.append(b)
+        except Exception as e:
+            errors.append(f"{r.get('name','?')}: {e}")
+    if errors:
+        st.warning("Algunos bonos no se pudieron cargar:\n- " + "\n- ".join(errors))
     return bonds
 
 def bond_flows_frame(b):
@@ -451,67 +429,56 @@ def bond_flows_frame(b):
         "Flujo": cfs
     })
 
-# ===============================
+# =====================================
 # UI
-# ===============================
-st.title("📈 Calculadora ONs")
-st.caption("Fuente Excel: GitHub (RAW). Precios preferidos: **px_ask** (fijo).")
+# =====================================
+st.title("📈 Calculadora ONs (px_ask)")
 
-with st.sidebar:
-    st.subheader("Datos de mercado")
-    st.write("Se consultan automáticamente desde data912 (arg_bonds, arg_notes, arg_corp).")
-    st.write("Precio preferido: **px_ask** (no modificable).")
-
+# Entrada de Excel RAW (sin sidebar de “datos de mercado”)
+with st.expander("Fuente de datos (Excel RAW en GitHub)"):
     excel_source = st.text_input(
-        "URL del Excel (RAW GitHub)",
+        "URL del Excel",
         value=EXCEL_URL_DEFAULT,
-        help="Debe ser el enlace RAW al archivo .xlsx"
-    )
-    st.markdown(
-        "<small>Ejemplo RAW: "
-        "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx</small>",
-        unsafe_allow_html=True
+        help="Debe ser el enlace RAW al archivo .xlsx con las columnas: name, empresa, curr, law, start_date, end_date, payment_frequency, amortization_dates, amortizations, rate"
     )
 
-# --- Carga de precios y Excel ---
+# Botón actualizar precios
+col_header = st.columns([1, 1, 6])
+with col_header[0]:
+    if st.button("🔄 Actualizar precios", type="primary", help="Refresca precios de data912"):
+        st.cache_data.clear()
+        st.rerun()
+with col_header[1]:
+    st.caption("El tablero usa **px_ask** como precio preferido (no modificable).")
+
+# Carga de precios y excel
 with st.spinner("Cargando precios y Excel..."):
     df_all = build_df_all()
     if df_all.empty:
-        st.error("No hay precios disponibles. Verificá el servicio de data912.")
+        st.error("No hay precios disponibles (data912).")
         st.stop()
-
-    # Excel desde URL (RAW)
     try:
         excel_bytes = io.BytesIO(requests.get(excel_source, timeout=25).content)
     except Exception as e:
         st.error(f"No pude descargar el Excel desde la URL: {e}")
         st.stop()
-
-    try:
-        bonds = load_ons_from_excel(excel_bytes, df_all, price_col_prefer="px_ask")
-    except Exception as e:
-        st.error(f"❌ Error leyendo el Excel o creando bonos: {e}")
-        st.stop()
-
+    bonds = load_ons_from_excel(excel_bytes, df_all, price_col_prefer="px_ask")
     if not bonds:
-        st.warning("El Excel no produjo bonos válidos.")
+        st.error("El Excel no produjo bonos válidos.")
         st.stop()
-
     df_metrics = bond_fundamentals_ons(bonds)
 
-# --- Filtros ---
-col_filters = st.columns(3)
-with col_filters[0]:
-    empresas = sorted(df_metrics["Empresa"].dropna().unique().tolist())
-    sel_emp = st.multiselect("Empresa", empresas, default=empresas)
-
-with col_filters[1]:
-    monedas = sorted(df_metrics["Moneda de Pago"].dropna().unique().tolist())
-    sel_mon = st.multiselect("Moneda de Pago", monedas, default=monedas)
-
-with col_filters[2]:
-    leyes = sorted(df_metrics["Ley"].dropna().unique().tolist())
-    sel_ley = st.multiselect("Ley", leyes, default=leyes)
+# Filtros
+fc = st.columns(3)
+with fc[0]:
+    emp_opts = sorted(df_metrics["Empresa"].dropna().unique().tolist())
+    sel_emp = st.multiselect("Empresa", emp_opts, default=emp_opts)
+with fc[1]:
+    mon_opts = sorted(df_metrics["Moneda de Pago"].dropna().unique().tolist())
+    sel_mon = st.multiselect("Moneda de Pago", mon_opts, default=mon_opts)
+with fc[2]:
+    ley_opts = sorted(df_metrics["Ley"].dropna().unique().tolist())
+    sel_ley = st.multiselect("Ley", ley_opts, default=ley_opts)
 
 mask = (
     df_metrics["Empresa"].isin(sel_emp) &
@@ -519,33 +486,94 @@ mask = (
     df_metrics["Ley"].isin(sel_ley)
 )
 df_view = df_metrics.loc[mask].reset_index(drop=True)
+st.dataframe(df_view, use_container_width=True, height=420)
 
-st.dataframe(df_view, use_container_width=True)
-
-# Botón de descarga
+# Descargar CSV filtrado
 csv = df_view.to_csv(index=False).encode("utf-8")
-st.download_button("⬇️ Descargar CSV filtrado", data=csv, file_name="ons_metrics.csv", mime="text/csv")
+st.download_button("⬇️ Descargar CSV", data=csv, file_name="ons_metrics.csv", mime="text/csv")
 
-# --- Detalle de flujos por Ticker ---
 st.markdown("---")
-col_detail = st.columns([1, 2])
-with col_detail[0]:
+
+# =========================
+# Flujos escalados
+# =========================
+colA, colB = st.columns([2, 3])
+with colA:
+    st.subheader("Flujos")
     tickers = ["(ninguno)"] + df_view["Ticker"].dropna().unique().tolist()
-    pick = st.selectbox("Ver cash flow de:", tickers, index=0)
+    pick = st.selectbox("Ticker", tickers, index=0)
 
-with col_detail[1]:
-    st.markdown("**Precio preferido**: `px_ask` (fijo)")
+    mode = st.radio("Modo de cálculo", ["Por nominales (VN)", "Por monto / precio manual"], horizontal=False)
 
-if pick and pick != "(ninguno)":
-    bmap = {b.name: b for b in bonds}
-    if pick in bmap:
-        b = bmap[pick]
-        st.subheader(f"Flujos: {pick}")
-        st.write(f"Empresa: **{b.empresa}** · Moneda: **{b.curr}** · Ley: **{b.law}** · Cupón: **{round(b.rate*100,4)}%** · Precio (px_ask): **{b.price:.2f}**")
-        df_flows = bond_flows_frame(b)
-        st.dataframe(df_flows, use_container_width=True)
+    if mode == "Por nominales (VN)":
+        vn = st.number_input("Nominales (VN)", min_value=0.0, value=100.0, step=100.0, help="Base de la clase: flujos por 100 nominal. Se escala: VN/100")
+        precio_manual = None
+        monto = None
     else:
-        st.warning(f"No encontré el objeto del bono {pick} en la carga.")
+        monto = st.number_input("Monto a invertir", min_value=0.0, value=10000.0, step=1000.0)
+        precio_manual = st.number_input("Precio manual (por 100 nominal, clean)", min_value=0.0001, value=100.0, step=0.5)
+        vn = None
 
-# Footer
-st.caption("© Calculadora ONs — usa ACT/365F para corrido y cupones base residual (inicio de período).")
+with colB:
+    if pick and pick != "(ninguno)":
+        bmap = {b.name: b for b in bonds}
+        if pick in bmap:
+            b = bmap[pick]
+            st.write(f"**{pick}** — Empresa: {b.empresa} · Moneda: {b.curr} · Ley: {b.law} · Cupón: {round(b.rate*100,4)}% · Precio (px_ask): {b.price:.2f}")
+
+            df_flows = bond_flows_frame(b)
+
+            # Escalado (excluyendo fila 0)
+            if mode == "Por nominales (VN)":
+                scale = (vn or 0.0) / 100.0
+            else:
+                # escala = monto / precio_manual (número de "bloques" de 100 nominales)
+                scale = 0.0 if not monto or not precio_manual else (monto / precio_manual)
+
+            df_cash = df_flows.copy()
+            if scale > 0:
+                df_cash.loc[1:, ["Residual","Amortización","Cupón","Flujo"]] = \
+                    df_cash.loc[1:, ["Residual","Amortización","Cupón","Flujo"]].astype(float) * scale
+
+            st.dataframe(df_cash.iloc[1:].reset_index(drop=True), use_container_width=True, height=360)
+
+            if scale > 0:
+                total_cobros = float(df_cash["Flujo"].iloc[1:].sum())
+                st.metric("Total a cobrar (sumatoria flujos futuros)", f"{total_cobros:,.2f}")
+        else:
+            st.warning(f"No encontré el bono {pick} en la lista cargada.")
+
+st.markdown("---")
+
+# =========================
+# Métricas con precio manual
+# =========================
+st.subheader("Calculadora de métricas (precio manual)")
+colM1, colM2, colM3, colM4 = st.columns([2, 1.2, 1.2, 3])
+
+with colM1:
+    tick2 = st.selectbox("Ticker", ["(ninguno)"] + df_metrics["Ticker"].dropna().unique().tolist(), index=0)
+
+with colM2:
+    pman = st.number_input("Precio manual", min_value=0.0, value=100.0, step=0.5)
+
+with colM3:
+    go_btn = st.button("Calcular métricas")
+
+with colM4:
+    if go_btn and tick2 and tick2 != "(ninguno)":
+        bmap = {b.name: b for b in bonds}
+        if tick2 in bmap:
+            b0 = bmap[tick2]
+            # clon con precio manual
+            b = ons_pro(
+                name=b0.name, empresa=b0.empresa, curr=b0.curr, law=b0.law,
+                start_date=b0.start_date, end_date=b0.end_date, payment_frequency=b0.payment_frequency,
+                amortization_dates=b0.amortization_dates, amortizations=b0.amortizations,
+                rate=b0.rate*100.0, price=pman  # rate pasa como % a la __init__
+            )
+            df_one = bond_fundamentals_ons([b])
+            st.dataframe(df_one, use_container_width=True, height=120)
+        else:
+            st.warning(f"No encontré el bono {tick2} para el cálculo manual.")
+
