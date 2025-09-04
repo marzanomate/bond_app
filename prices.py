@@ -492,7 +492,7 @@ st.dataframe(
     hide_index=True,
     use_container_width=True,
     column_config={
-        "Cupón":         st.column_config.NumberColumn("Cupón",         format="%.4f"),
+        "Cupón":         st.column_config.NumberColumn("Cupón",         format="%.2f"),
         "Precio":        st.column_config.NumberColumn("Precio",        format="%.2f"),
         "Yield":         st.column_config.NumberColumn("Yield",         format="%.2f"),
         "TNA_180":       st.column_config.NumberColumn("TNA_180",       format="%.2f"),
