@@ -428,7 +428,8 @@ def bond_flows_frame(b):
         "Cupón": cpns,
         "Flujo": cfs
     })
-
+    
+@st.cache_data(show_spinner=False)
 excel_source = st.text_input(
     "URL del Excel",
     value=EXCEL_URL_DEFAULT,
