@@ -455,7 +455,7 @@ with st.spinner("Cargando precios"):
         st.error("No hay precios disponibles")
         st.stop()
     try:
-        excel_bytes = io.BytesIO(fetch_excel_bytes(excel_source))
+        excel_bytes = io.BytesIO(requests.get(excel_source, timeout=25).content)
     except Exception as e:
         st.error(f"No pude descargar el Excel desde la URL: {e}")
         st.stop()
