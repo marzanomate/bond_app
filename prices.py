@@ -19,7 +19,7 @@ URL_NOTES = "https://data912.com/live/arg_notes"
 URL_CORPS = "https://data912.com/live/arg_corp"
 
 # =====================================
-# Clase de ON (sin 'frequency' explícito)
+# Clase de ON
 # =====================================
 class ons_pro:
     def __init__(self, name, empresa, curr, law, start_date, end_date, payment_frequency,
@@ -226,6 +226,7 @@ class ons_pro:
 # =====================================
 # Parseo y precios
 # =====================================
+
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def parse_date_cell(s):
@@ -307,7 +308,7 @@ def harmonize_prices(df):
             out[c] = np.nan
     return out[["symbol", "px_bid", "px_ask"] + [c for c in out.columns if c not in ["symbol","px_bid","px_ask"]]]
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=90, show_spinner=False, max_entries=4)
 def build_df_all():
     bonds = to_df(fetch_json(URL_BONDS))
     notes = to_df(fetch_json(URL_NOTES))
@@ -337,6 +338,7 @@ def get_price_for_symbol(df_all, symbol, prefer="px_ask"):
 # =====================================
 # Loader Excel -> objetos + métricas
 # =====================================
+
 def bond_fundamentals_ons(bond_objs):
     rows = []
     for b in bond_objs:
@@ -435,6 +437,7 @@ excel_source = EXCEL_URL_DEFAULT
 # =====================================
 # UI
 # =====================================
+
 st.title("📈 Obligaciones Negociables")
 
 # Botón actualizar precios
@@ -452,7 +455,7 @@ with st.spinner("Cargando precios"):
         st.error("No hay precios disponibles")
         st.stop()
     try:
-        excel_bytes = io.BytesIO(requests.get(excel_source, timeout=25).content)
+        excel_bytes = io.BytesIO(fetch_excel_bytes(excel_source))
     except Exception as e:
         st.error(f"No pude descargar el Excel desde la URL: {e}")
         st.stop()
@@ -464,15 +467,18 @@ with st.spinner("Cargando precios"):
 
 # Filtros
 fc = st.columns(3)
-with fc[0]:
-    emp_opts = sorted(df_metrics["Empresa"].dropna().unique().tolist())
-    sel_emp = st.multiselect("Empresa", emp_opts, default=emp_opts, key="filter_emp")
-with fc[1]:
-    mon_opts = sorted(df_metrics["Moneda de Pago"].dropna().unique().tolist())
-    sel_mon = st.multiselect("Moneda de Pago", mon_opts, default=mon_opts, key="filter_mon")
-with fc[2]:
-    ley_opts = sorted(df_metrics["Ley"].dropna().unique().tolist())
-    sel_ley = st.multiselect("Ley", ley_opts, default=ley_opts, key="filter_ley")
+with st.form("filters"):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        emp_opts = sorted(df_metrics["Empresa"].dropna().unique().tolist())
+        sel_emp = st.multiselect("Empresa", emp_opts, default=emp_opts)
+    with c2:
+        mon_opts = sorted(df_metrics["Moneda de Pago"].dropna().unique().tolist())
+        sel_mon = st.multiselect("Moneda de Pago", mon_opts, default=mon_opts)
+    with c3:
+        ley_opts = sorted(df_metrics["Ley"].dropna().unique().tolist())
+        sel_ley = st.multiselect("Ley", ley_opts, default=ley_opts)
+    submitted = st.form_submit_button("Aplicar filtros")
 
 mask = (
     df_metrics["Empresa"].isin(sel_emp) &
