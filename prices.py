@@ -560,6 +560,11 @@ df_view = df_metrics.loc[mask].reset_index(drop=True)  # Vista filtrada
 
 # Define columnas numéricas para formateo consistente	num_cols = ["Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"]  # Lista numérica
 
+# 🔹 Definición de columnas numéricas (corregido: estaba mal ubicada antes)
+num_cols = [
+"Cupón","Precio","Yield","TNA_180","Dur","MD","Conv","Current Yield","Paridad (%)"
+] # Lista numérica
+
 # Copia segura para formateo de la grilla
 dfv = df_metrics.copy()  # Copia
 for c in num_cols:
