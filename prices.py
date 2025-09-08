@@ -808,9 +808,9 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
         dates = b.generate_payment_dates()[1:]
         flows = b.cash_flow()[1:]
 
-        if mode == "nominal":
-            nominal = float(inputs.get(b.name, 0) or 0)
-        else:  # "monto"
+        if mode == "Nominales":
+            nominal = float(inputs.get(b.name, 0) or 0) / 100
+        else:  # "Monto"
             monto = float(inputs.get(b.name, 0) or 0)
             nominal = (monto / b.price) if (b.price and b.price == b.price) else 0.0
 
@@ -914,13 +914,13 @@ def main():
                 options=sorted(name_to_bond.keys()),
                 default=[]
             )
-            mode = st.radio("Modo de entrada", ["nominal", "monto"], horizontal=True, index=0)
+            mode = st.radio("Modo de entrada", ["Nominales", "Monto"], horizontal=True, index=0)
         with colB:
             inputs = {}
             if sel_bonds:
                 st.write("Parámetros por bono:")
                 for n in sel_bonds:
-                    if mode == "nominal":
+                    if mode == "Nominales":
                         val = st.number_input(f"VN de {n}", min_value=0.0, step=100.0, value=0.0, key=f"vn_{n}")
                     else:
                         val = st.number_input(f"Monto (USD) para {n}", min_value=0.0, step=100.0, value=0.0, key=f"amt_{n}")
