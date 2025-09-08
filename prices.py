@@ -808,11 +808,23 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
         dates = b.generate_payment_dates()[1:]
         flows = b.cash_flow()[1:]
 
-        if mode == "nominal":
-            nominal = float(inputs.get(b.name, 0) or 0)/100
-        else:  # "monto"
-            monto = float(inputs.get(b.name, 0) or 0)
-            nominal = (monto / b.price) if (b.price and b.price == b.price) else 0.0
+        if mode.lower() == "nominal":
+            # inputs[b.name] debería ser el nominal en VN
+            nominal = float(inputs.get(b.name, 0) or 0) / 100.0
+
+        elif mode.lower() == "monto":
+            # inputs[b.name] debe ser dict con {"monto": ..., "precio": ...}
+            user_data = inputs.get(b.name, {})
+            monto = float(user_data.get("monto", 0) or 0)
+            precio_manual = user_data.get("precio", None)
+
+            precio_base = float(precio_manual) if precio_manual not in (None, "") else b.price
+            if precio_base and precio_base == precio_base:  # no NaN
+                nominal = monto / precio_base
+            else:
+                nominal = 0.0
+        else:
+            raise ValueError("mode must be 'Nominal' or 'Monto'")
 
         for d, f in zip(dates, flows):
             rows.append({"Fecha": d, "Ticker": b.name, "Flujo": round(f * nominal, 1)})
@@ -820,9 +832,11 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
     df = pd.DataFrame(rows)
     if df.empty:
         return pd.DataFrame(columns=["Fecha", "Total"])
+
     df_total = df.groupby("Fecha", as_index=False)["Flujo"].sum()
-    df_total = df_total.rename(columns={"Flujo":"Total"})
+    df_total = df_total.rename(columns={"Flujo": "Total"})
     df_total["Total"] = df_total["Total"].round(1)
+
     return df_total
 
 # =========================
