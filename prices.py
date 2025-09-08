@@ -742,7 +742,7 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
         flows = b.cash_flow()[1:]
 
         if mode == "nominal":
-            nominal = float(inputs.get(b.name, 0) or 0)
+            nominal = float(inputs.get(b.name, 0) or 0)/100
         else:  # "monto"
             monto = float(inputs.get(b.name, 0) or 0)
             nominal = (monto / b.price) if (b.price and b.price == b.price) else 0.0
