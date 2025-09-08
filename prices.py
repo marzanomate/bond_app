@@ -801,81 +801,29 @@ def manual_bonds_factory(df_all):
 # =========================
 # Simulador de flujos
 # =========================
-def cashflow_inputs_ui(selected_objs: list, mode: str) -> dict:
-    """
-    Devuelve el diccionario 'inputs' esperado por build_cashflow_table.
-    - mode='Nominal' -> inputs[b.name] = <VN>
-    - mode='Monto'   -> inputs[b.name] = {'monto': <float>, 'precio': <float|None>}
-    """
-    inputs = {}
-    mode_norm = mode.strip().lower()
+def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.DataFrame:
+    rows = []
+    for b in selected_bonds:
+        # SIN el primer flujo (precio): solo pagos
+        dates = b.generate_payment_dates()[1:]
+        flows = b.cash_flow()[1:]
 
-    if mode_norm == "Nominal":
-        st.caption("Ingresá el **Valor Nominal** por bono (por cada 100 de VN).")
-        for b in selected_objs:
-            vn = st.number_input(
-                f"VN - {b.name}",
-                min_value=0.0, step=100.0, format="%.1f",
-                key=f"vn_{b.name}"
-            )
-            inputs[b.name] = vn
+        if mode == "nominal":
+            nominal = float(inputs.get(b.name, 0) or 0)
+        else:  # "monto"
+            monto = float(inputs.get(b.name, 0) or 0)
+            nominal = (monto / b.price) if (b.price and b.price == b.price) else 0.0
 
-    elif mode_norm == "monto":
-        st.caption("Ingresá el **Monto** y, opcionalmente, un **Precio manual** por bono.")
-        for b in selected_objs:
-            c1, c2 = st.columns(2)
-            with c1:
-                monto = st.number_input(
-                    f"Monto - {b.name}",
-                    min_value=0.0, step=1000.0, format="%.1f",
-                    key=f"monto_{b.name}"
-                )
-            with c2:
-                precio_manual = st.number_input(
-                    f"Precio manual - {b.name} (actual: {b.price:.1f})",
-                    min_value=0.0, step=0.1, format="%.1f",
-                    key=f"precio_{b.name}"
-                )
-                # Si queda en 0.0, lo tratamos como “no ingresado”
-                precio_manual = None if precio_manual == 0.0 else float(precio_manual)
+        for d, f in zip(dates, flows):
+            rows.append({"Fecha": d, "Ticker": b.name, "Flujo": round(f * nominal, 1)})
 
-            inputs[b.name] = {"monto": float(monto), "precio": precio_manual}
-    else:
-        st.error("Modo inválido. Elegí 'Nominal' o 'Monto'.")
-
-    return inputs
-
-
-def cashflow_simulator_ui(all_bonds_by_name: dict):
-    """
-    Un pequeño contenedor de UI: seleccionás bonos, elegís modo,
-    completás los campos y calculás el cash flow agregado.
-    """
-    st.subheader("🧮 Simulador de Flujos")
-    # Selección de bonos
-    tickers = st.multiselect(
-        "Elegí los bonos:",
-        options=sorted(all_bonds_by_name.keys()),
-    )
-    selected_objs = [all_bonds_by_name[t] for t in tickers]
-
-    # Modo de carga
-    mode = st.radio("Modo de carga", ["Nominal", "Monto"], horizontal=True)
-
-    # Casilleros por bono según modo
-    if selected_objs:
-        inputs = cashflow_inputs_ui(selected_objs, mode)
-
-        # Botón calcular
-        if st.button("Calcular flujos", type="primary"):
-            df_cf = build_cashflow_table(selected_objs, mode, inputs)
-            st.dataframe(
-                df_cf.style.format({"Total": "{:.1f}"}).hide(axis="index"),
-                use_container_width=True
-            )
-    else:
-        st.info("Seleccioná al menos un bono para ingresar valores.")
-
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=["Fecha", "Total"])
+    df_total = df.groupby("Fecha", as_index=False)["Flujo"].sum()
+    df_total = df_total.rename(columns={"Flujo":"Total"})
+    df_total["Total"] = df_total["Total"].round(1)
+    return df_total
 # =========================
 # Calculadora de métricas (3 bonos, precio manual)
 # =========================
