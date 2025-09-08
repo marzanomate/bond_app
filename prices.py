@@ -863,7 +863,7 @@ def main():
         st.sidebar.success("Precios actualizados.")
 
     # --- Construcción de universos ---
-    ons_bonds = load_bcp_from_excel(df_all, adj=1.0, price_col_prefer="px_ask")
+    ons_bonds = load_bcp_from_excel(df_all, adj=1.005, price_col_prefer="px_ask")
     manual_bonds = manual_bonds_factory(df_all)
     all_bonds = ons_bonds + manual_bonds
     name_to_bond = {b.name: b for b in all_bonds}
