@@ -312,9 +312,76 @@ class bond_calculator_pro:
         annual = float(sum(cpns[i0:i0 + n]))
         return round(annual / self.price * 100.0, 1)
 
+    # -------- helpers de período (para AI) --------
+    def _last_next_coupon_dates(self, settlement: Optional[datetime] = None):
+        """Devuelve (last_coupon_date, next_coupon_date) alrededor de settlement."""
+        stl = self._settlement(settlement)
+        # construyo las fechas del calendario completo (hacia atrás), y me quedo con la primera futura
+        fut = self._schedule_backwards(settlement)
+        # fut = [settlement, f1, f2, ...]; la próxima es f1 si existe
+        next_coupon = fut[1] if len(fut) > 1 else None
+
+        # para obtener la última: voy restando períodos desde next_coupon
+        if next_coupon is None:
+            return (None, None)
+        last_coupon = next_coupon - relativedelta(months=self.payment_frequency)
+        # si por edge-case quedara > settlement, retrocedo otro período
+        if last_coupon > stl:
+            last_coupon = last_coupon - relativedelta(months=self.payment_frequency)
+        return (last_coupon, next_coupon)
+
+    def _accrual_fraction(self, settlement: Optional[datetime] = None) -> float:
+        """Fracción devengada en el período actual: días corridos / días del período (Actual/Actual por días)."""
+        stl = self._settlement(settlement)
+        last_cpn, next_cpn = self._last_next_coupon_dates(settlement)
+        if last_cpn is None or next_cpn is None:
+            return 0.0
+        days_total = (next_cpn - last_cpn).days
+        days_run   = max(0, (stl - last_cpn).days)
+        return 0.0 if days_total <= 0 else min(1.0, days_run / days_total)
+
+    def _period_coupon_rate_and_base(self, settlement: Optional[datetime] = None):
+        """
+        Devuelve (rate_period_decimal, residual_base) del período actual:
+        - rate del período (con step-up) correspondiente al próximo cupón
+        - residual sobre el que se calcula el cupón (residual en el inicio del período)
+        """
+        dates = self.generate_payment_dates(settlement)
+        rates = self.step_up_rate(settlement)
+        residuals = self.residual_value(settlement)
+        if len(dates) < 2:
+            return (0.0, 0.0)
+
+        # Próxima fecha de pago es dates[1]
+        next_date = dates[1]
+        i = 1  # índice del próximo pago en nuestras listas
+        rate_period = float(rates[i])  # ya en decimal
+        residual_base = float(residuals[i-1])  # residual al inicio del período (en settlement)
+        return (rate_period, residual_base)
+
+    def accrued_interest(self, settlement: Optional[datetime] = None) -> float:
+        """
+        Interés corrido (por 100 VN) desde el último cupón hasta 'settlement'.
+        Convención: Actual/Actual por días del período.
+        """
+        frac = self._accrual_fraction(settlement)
+        if frac <= 0:
+            return 0.0
+        rate_period, residual_base = self._period_coupon_rate_and_base(settlement)
+        coupon_full = (rate_period / self.frequency) * residual_base
+        return round(coupon_full * frac, 6)  # precisión interna, luego redondeás a 1 decimal en la UI
+
     def parity(self, settlement: Optional[datetime] = None) -> float:
-        vt = float(self.residual_value(settlement)[0])
-        return float("nan") if vt == 0 else round(self.price / vt * 100.0, 1)
+        """
+        Paridad técnica = Precio (clean) / (Valor residual + AI) * 100.
+        Si tu precio fuese 'dirty', usá dirty/(residual) o ajustá la fórmula según tu convención.
+        """
+        residual_t0 = float(self.residual_value(settlement)[0])  # por 100 VN
+        ai = self.accrued_interest(settlement)                   # por 100 VN
+        denom = residual_t0 + ai
+        if denom <= 0 or not np.isfinite(denom):
+            return float("nan")
+        return round(self.price / denom * 100.0, 1)
 
 # =========================
 # Helpers de parsing Excel
