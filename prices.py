@@ -56,7 +56,7 @@ class bond_calculator_pro:
         if pf <= 0:
             raise ValueError(f"{name}: payment_frequency must be > 0 (months).")
         self.payment_frequency = pf
-        self.frequency = max(1, int(round(12 / self.payment_frequency, 2)))  # cupones/año
+        self.frequency = max(1, int(round(12 / self.payment_frequency)))  # cupones/año
 
         # Normalización de amortizaciones
         self.amortization_dates = [str(d) for d in amortization_dates]
@@ -98,18 +98,36 @@ class bond_calculator_pro:
         key = ("sched", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-
+    
         stl = self._settlement(settlement)
-        back = [self.end_date]
+    
+        # calendario periódico “hacia atrás” desde el vencimiento
+        periodic = [self.end_date]
         cur = self.end_date
         while True:
             prev = cur - relativedelta(months=self.payment_frequency)
             if prev <= self.start_date:
                 break
-            back.append(prev)
+            periodic.append(prev)
             cur = prev
-
-        future = sorted(d for d in back if d > stl)
+    
+        # incluir TODAS las fechas de amortización del Excel (en rango)
+        am_dates_dt = []
+        for s in self.amortization_dates:
+            try:
+                d = datetime.strptime(s, "%Y-%m-%d")
+            except ValueError:
+                # si viniera con otro formato, intentá parsear por pandas como fallback
+                d = pd.to_datetime(s, dayfirst=True).to_pydatetime()
+            if self.start_date < d <= self.end_date:
+                am_dates_dt.append(d)
+    
+        # Unión: calendario = fechas periódicas ∪ fechas de amortización
+        all_dates = set(periodic) | set(am_dates_dt)
+    
+        # Solo futuro estricto (después del settlement), en orden ascendente
+        future = sorted(d for d in all_dates if d > stl)
+    
         out = [stl] + future
         self._cache[key] = out
         return out
@@ -185,24 +203,24 @@ class bond_calculator_pro:
         self._cache[key] = out
         return out
 
-    def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
+   def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
         """
-        Cupón del período (t_{i-1}, t_i] = tasa_del_período * saldo_al_inicio / frecuencia.
-        Usamos rates[i-1] para reflejar step-ups que cambian justo en t_i.
+        Cupón en t_i = (tasa del período (t_{i-1}, t_i]) * (saldo al inicio del período) / frecuencia.
+        Usamos rates[i-1] y residuals[i-1].
         """
         key = ("coupons", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
     
-        rates = self.step_up_rate(settlement)       # tasa “vigente en la fecha”
-        residuals = self.residual_value(settlement) # saldo post-amort por fecha
+        rates = self.step_up_rate(settlement)
+        residuals = self.residual_value(settlement)
         f = self.frequency
     
         cpns = [0.0]  # en t0 no hay cupón
         for i in range(1, len(rates)):
-            rate_interval = rates[i]            # tasa del período (t_{i-1}, t_i]
-            base = residuals[i]                 # saldo al inicio del período (ya neto de amort en t_{i-1})
-            cpns.append((rate_interval / 2) * base)
+            rate_interval = float(rates[i-1])   # tasa del período anterior
+            base = float(residuals[i-1])        # saldo al inicio del período
+            cpns.append((rate_interval / f) * base)
     
         self._cache[key] = cpns
         return cpns
