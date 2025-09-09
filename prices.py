@@ -949,7 +949,7 @@ def main():
         # =========================
         # 2) SIMULADOR DE FLUJOS
         # =========================
-        st.subheader("Simulador de Flujos (sin desembolso inicial)")
+        st.subheader("Simulador de Flujos")
         
         colA, colB = st.columns([1, 2])
         with colA:
@@ -1001,9 +1001,9 @@ def main():
 
 
         # =========================
-        # 3) Calculadora de Métricas (3 bonos con precio manual)
+        # 3) Calculadora de Métricas
         # =========================
-        st.subheader("Comparador de Métricas (3 bonos, precio manual)")
+        st.subheader("Comparador de Métricas")
         c1, c2, c3 = st.columns(3)
         with c1:
             b1 = st.selectbox("Bono 1", [""] + sorted(name_to_bond.keys()), index=0, key="cmp_b1")
