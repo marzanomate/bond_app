@@ -909,26 +909,30 @@ def main():
         df_full = metrics_bcp(all_bonds)
 
         # Filtros
-        colf1, colf2, colf3 = st.columns(3)
+        colf1, colf2, colf3, colf4 = st.columns(4)
         
         emisores = sorted([e for e in df_full["Emisor"].dropna().unique()])
         monedas  = sorted([m for m in df_full["Moneda de Pago"].dropna().unique()])
         leyes    = sorted([l for l in df_full["Ley"].dropna().unique()])
-
+        tickers  = sorted([t for t in df_full["Ticker"].dropna().unique()])
+        
         with colf1:
             f_emisor = st.multiselect("Filtrar Emisor", emisores, default=emisores)
         with colf2:
             f_moneda = st.multiselect("Filtrar Moneda de Pago", monedas, default=monedas)
         with colf3:
             f_ley    = st.multiselect("Filtrar Ley", leyes, default=leyes)
-
+        with colf4:
+            f_ticker = st.multiselect("Filtrar Ticker", tickers, default=tickers)
+        
         mask = (
-            df_full["Emisor"].isin(f_emisor) &
-            df_full["Moneda de Pago"].isin(f_moneda) &
-            df_full["Ley"].isin(f_ley)
+            df_full["Emisor"].isin(f_emisor)
+            & df_full["Moneda de Pago"].isin(f_moneda)
+            & df_full["Ley"].isin(f_ley)
+            & df_full["Ticker"].isin(f_ticker)
         )
         df_filtered = df_full.loc[mask].reset_index(drop=True)
-
+        
         # Render centrado y 1 decimal
         html_tbl = center_table(df_filtered)
         st.markdown(html_tbl, unsafe_allow_html=True)
