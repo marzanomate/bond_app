@@ -18,11 +18,17 @@ st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
 # =========================
 # Clase bond_calculator_pro
 # =========================
+
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+from typing import List, Optional, Dict, Any
+import numpy as np
+
 class bond_calculator_pro:
     """
     Bonos con cupón fijo y amortizaciones discretas (en % de 100),
     con step-ups opcionales. Genera fechas hacia atrás desde el vencimiento
-    (limitadas por la fecha de emisión), y devuelve en orden cronológico
+    (limitadas por la fecha de emisión) y devuelve en orden cronológico
     (primero T+1 settlement).
     """
 
@@ -56,7 +62,7 @@ class bond_calculator_pro:
         if pf <= 0:
             raise ValueError(f"{name}: payment_frequency must be > 0 (months).")
         self.payment_frequency = pf
-        self.frequency = max(1, int(round(12 / self.payment_frequency)))  # cupones/año
+        self.frequency = max(1, int(round(12 / self.payment_frequency)))  # cupones/año (entero)
 
         # Normalización de amortizaciones
         self.amortization_dates = [str(d) for d in amortization_dates]
@@ -82,103 +88,93 @@ class bond_calculator_pro:
         self.step_up = [r for _, r in steps]
 
         self.outstanding = float(outstanding)
-
-        # Cache
         self._cache: Dict[str, Any] = {}
 
-    # ---- helpers internos ----
+    # ----------------- helpers internos -----------------
     def _settlement(self, settlement: Optional[datetime] = None) -> datetime:
         return settlement if settlement else (datetime.today() + timedelta(days=1))
+
+    def _as_dt(self, d):
+        return d if isinstance(d, datetime) else datetime.strptime(d, "%Y-%m-%d")
+
+    def _amort_map_dt(self) -> Dict[datetime, float]:
+        """Amorts con clave datetime (para comparar por fechas)."""
+        return {self._as_dt(d): float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
 
     def _clear_cache(self):
         self._cache.clear()
 
-    # ---- calendario hacia atrás ----
+    # ----------------- calendario hacia atrás -----------------
     def _schedule_backwards(self, settlement: Optional[datetime] = None):
         key = ("sched", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-    
+
         stl = self._settlement(settlement)
-    
-        # calendario periódico “hacia atrás” desde el vencimiento
-        periodic = [self.end_date]
+        back = [self.end_date]
         cur = self.end_date
         while True:
             prev = cur - relativedelta(months=self.payment_frequency)
             if prev <= self.start_date:
                 break
-            periodic.append(prev)
+            back.append(prev)
             cur = prev
-    
-        # incluir TODAS las fechas de amortización del Excel (en rango)
-        am_dates_dt = []
-        for s in self.amortization_dates:
-            try:
-                d = datetime.strptime(s, "%Y-%m-%d")
-            except ValueError:
-                # si viniera con otro formato, intentá parsear por pandas como fallback
-                d = pd.to_datetime(s, dayfirst=True).to_pydatetime()
-            if self.start_date < d <= self.end_date:
-                am_dates_dt.append(d)
-    
-        # Unión: calendario = fechas periódicas ∪ fechas de amortización
-        all_dates = set(periodic) | set(am_dates_dt)
-    
-        # Solo futuro estricto (después del settlement), en orden ascendente
-        future = sorted(d for d in all_dates if d > stl)
-    
-        out = [stl] + future
+
+        future = sorted(d for d in back if d > stl)
+        out = [stl] + future  # t0 = settlement
         self._cache[key] = out
         return out
 
     def generate_payment_dates(self, settlement: Optional[datetime] = None) -> List[str]:
         return [d.strftime("%Y-%m-%d") for d in self._schedule_backwards(settlement)]
 
-    # ---- perfil de capital ----
+    # ----------------- saldo técnico (corrige amortizaciones pasadas) -----------------
+    def outstanding_on(self, ref_date: Optional[datetime] = None) -> float:
+        """
+        Principal outstanding (por 100) luego de amortizaciones con fecha <= ref_date.
+        """
+        if ref_date is None:
+            ref_date = self._settlement()
+        ref_date = self._as_dt(ref_date)
+        paid = sum(a for d, a in zip(self.amortization_dates, self.amortizations)
+                   if self._as_dt(d) <= ref_date)
+        return max(0.0, 100.0 - paid)
+
+    # ----------------- perfil de capital -----------------
     def residual_value(self, settlement: Optional[datetime] = None) -> List[float]:
         """
-        Devuelve el saldo de capital *después* de amortizar en cada fecha.
-        res[0] = 100 en settlement (no hay amort en t0).
-        Para i >= 1: res[i] = res[i-1] - amort(t_i)
+        residual[i] = saldo técnico en la fecha 'dates[i]' (post amort de esa fecha si aplica).
+        Esto hace que amortizaciones anteriores (ya ocurridas) se reflejen en t0 y siguientes.
         """
         key = ("residual", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-    
-        dates = self.generate_payment_dates(settlement)
-        am_map = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
-    
-        res = []
-        R = 100.0
-        # t0 (settlement)
-        res.append(R)
-    
-        # fechas futuras
-        for d in dates[1:]:
-            R = max(0.0, R - am_map.get(d, 0.0))  # amortiza en la fecha
-            res.append(R)
-    
+
+        dates_dt = [self._as_dt(s) for s in self.generate_payment_dates(settlement)]
+        res = [self.outstanding_on(d) for d in dates_dt]
         self._cache[key] = res
         return res
 
     def amortization_payments(self, settlement: Optional[datetime] = None) -> List[float]:
         """
-        Vector alineado con las fechas: cap[0]=0 en settlement; cap[i]=amort en fecha_i.
+        cap[0] = 0 en settlement; cap[i] = amort programada en esa fecha futura (0 si no hay).
+        (Las amortizaciones anteriores a settlement NO aparecen acá porque ya quedaron
+        incorporadas en el saldo técnico).
         """
         key = ("amorts", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-    
-        dates = self.generate_payment_dates(settlement)
-        am_map = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
-        caps = [0.0]  # en t0 no hay pago de capital
-        caps.extend([am_map.get(d, 0.0) for d in dates[1:]])
-    
+
+        am_dt = self._amort_map_dt()
+        dates_dt = [self._as_dt(s) for s in self.generate_payment_dates(settlement)]
+        caps = [0.0]  # en t0 no hay pago
+        for d in dates_dt[1:]:
+            caps.append(am_dt.get(d, 0.0))
+
         self._cache[key] = caps
         return caps
 
-    # ---- step-ups y cupones ----
+    # ----------------- step-ups y cupones -----------------
     def step_up_rate(self, settlement: Optional[datetime] = None) -> List[float]:
         key = ("steprate", (settlement or 0))
         if key in self._cache:
@@ -202,30 +198,32 @@ class bond_calculator_pro:
             out.append(r)
         self._cache[key] = out
         return out
-        
+
     def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
         """
         Cupón en t_i = (tasa del período (t_{i-1}, t_i]) * (saldo al inicio del período) / frecuencia.
-        Usamos rates[i-1] y residuals[i-1].
+        - Saldo al inicio del período = outstanding_on(t_{i-1})  (ya neto de amort en t_{i-1})
+        - Tasa del período: usamos la que aplica a t_i (o equivalentemente a (t_{i-1}, t_i]).
         """
         key = ("coupons", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-        
+
+        dates_dt = [self._as_dt(s) for s in self.generate_payment_dates(settlement)]
         rates = self.step_up_rate(settlement)
-        residuals = self.residual_value(settlement)
         f = self.frequency
-        
+
         cpns = [0.0]  # en t0 no hay cupón
-        for i in range(1, len(rates)):
-            rate_interval = float(rates[i-1])   # tasa del período anterior
-            base = float(residuals[i-1])        # saldo al inicio del período
+        for i in range(1, len(dates_dt)):
+            period_start = dates_dt[i-1]  # t_{i-1} (settlement o cupón previo)
+            rate_interval = float(rates[i])  # tasa correspondiente al período que finaliza en t_i
+            base = self.outstanding_on(period_start)
             cpns.append((rate_interval / f) * base)
-        
+
         self._cache[key] = cpns
         return cpns
 
-    # ---- flujos (precio excluido en la UI de simulación) ----
+    # ----------------- flujos -----------------
     def cash_flow(self, settlement: Optional[datetime] = None) -> List[float]:
         key = ("cash", (settlement or 0))
         if key in self._cache:
@@ -236,7 +234,7 @@ class bond_calculator_pro:
         self._cache[key] = cfs
         return cfs
 
-    # ---- PV / IRR ----
+    # ----------------- PV / IRR -----------------
     def _times_years(self, settlement: Optional[datetime] = None) -> np.ndarray:
         key = ("times", (settlement or 0))
         if key in self._cache:
@@ -300,7 +298,7 @@ class bond_calculator_pro:
                 lo, flo = m, fm
         return round(0.5 * (lo + hi) * 100.0, 1)
 
-    # ---- analytics ----
+    # ----------------- analytics -----------------
     def tna_180(self, settlement: Optional[datetime] = None) -> float:
         irr = self.xirr(settlement) / 100.0
         return round((((1 + irr) ** 0.5 - 1) * 2) * 100.0, 1)
@@ -343,88 +341,65 @@ class bond_calculator_pro:
         cx = float(cx_term[1:].sum() / price_pos)
         return round(cx, 1)
 
-    def current_yield(self, settlement: Optional[datetime] = None) -> float:
-        cpns = self.coupon_payments(settlement)
-        dates = [datetime.strptime(s, "%Y-%m-%d") for s in self.generate_payment_dates(settlement)]
-        stl = self._settlement(settlement)
-        idx = [i for i, d in enumerate(dates) if d > stl and cpns[i] > 0]
-        if not idx:
-            return float("nan")
-        i0 = idx[0]
-        n = min(self.frequency, len(cpns) - i0)
-        annual = float(sum(cpns[i0:i0 + n]))
-        return round(annual / self.price * 100.0, 1)
-
-    # -------- helpers de período (para AI) --------
+        # ----------------- intereses corridos y paridad -----------------
     def _last_next_coupon_dates(self, settlement: Optional[datetime] = None):
-        """Devuelve (last_coupon_date, next_coupon_date) alrededor de settlement."""
+        """Devuelve (última fecha de cupón, próxima fecha de cupón) alrededor de settlement."""
         stl = self._settlement(settlement)
-        # construyo las fechas del calendario completo (hacia atrás), y me quedo con la primera futura
-        fut = self._schedule_backwards(settlement)
-        # fut = [settlement, f1, f2, ...]; la próxima es f1 si existe
-        next_coupon = fut[1] if len(fut) > 1 else None
-
-        # para obtener la última: voy restando períodos desde next_coupon
-        if next_coupon is None:
+        sched = self._schedule_backwards(settlement)
+        if len(sched) < 2:
             return (None, None)
+        next_coupon = sched[1]
         last_coupon = next_coupon - relativedelta(months=self.payment_frequency)
-        # si por edge-case quedara > settlement, retrocedo otro período
         if last_coupon > stl:
             last_coupon = last_coupon - relativedelta(months=self.payment_frequency)
         return (last_coupon, next_coupon)
 
     def _accrual_fraction(self, settlement: Optional[datetime] = None) -> float:
-        """Fracción devengada en el período actual: días corridos / días del período (Actual/Actual por días)."""
+        """Fracción devengada en el período actual (Actual/Actual)."""
         stl = self._settlement(settlement)
         last_cpn, next_cpn = self._last_next_coupon_dates(settlement)
         if last_cpn is None or next_cpn is None:
             return 0.0
         days_total = (next_cpn - last_cpn).days
-        days_run   = max(0, (stl - last_cpn).days)
+        days_run = max(0, (stl - last_cpn).days)
         return 0.0 if days_total <= 0 else min(1.0, days_run / days_total)
 
     def _period_coupon_rate_and_base(self, settlement: Optional[datetime] = None):
         """
-        Devuelve (rate_period_decimal, residual_base) del período actual:
-        - rate del período (con step-up) correspondiente al próximo cupón
-        - residual sobre el que se calcula el cupón (residual en el inicio del período)
+        Retorna (tasa del período, base residual al inicio del período).
+        Usamos la tasa aplicable al próximo cupón y el saldo vigente al inicio.
         """
         dates = self.generate_payment_dates(settlement)
         rates = self.step_up_rate(settlement)
         residuals = self.residual_value(settlement)
         if len(dates) < 2:
             return (0.0, 0.0)
-
-        # Próxima fecha de pago es dates[1]
-        next_date = dates[1]
-        i = 1  # índice del próximo pago en nuestras listas
-        rate_period = float(rates[i])  # ya en decimal
-        residual_base = float(residuals[i-1])  # residual al inicio del período (en settlement)
+        rate_period = float(rates[1])
+        residual_base = float(residuals[0])
         return (rate_period, residual_base)
 
     def accrued_interest(self, settlement: Optional[datetime] = None) -> float:
-        """
-        Interés corrido (por 100 VN) desde el último cupón hasta 'settlement'.
-        Convención: Actual/Actual por días del período.
-        """
+        """Interés corrido (por 100 VN)."""
         frac = self._accrual_fraction(settlement)
         if frac <= 0:
             return 0.0
         rate_period, residual_base = self._period_coupon_rate_and_base(settlement)
         coupon_full = (rate_period / self.frequency) * residual_base
-        return round(coupon_full * frac, 6)  # precisión interna, luego redondeás a 1 decimal en la UI
+        return round(coupon_full * frac, 6)
 
     def parity(self, settlement: Optional[datetime] = None) -> float:
         """
-        Paridad técnica = Precio (clean) / (Valor residual + AI) * 100.
-        Si tu precio fuese 'dirty', usá dirty/(residual) o ajustá la fórmula según tu convención.
+        Paridad técnica = Precio clean / (Residual técnico + AI) * 100.
         """
-        residual_t0 = float(self.residual_value(settlement)[0])  # por 100 VN
-        ai = self.accrued_interest(settlement)                   # por 100 VN
+        residual_t0 = float(self.residual_value(settlement)[0])
+        ai = self.accrued_interest(settlement)
         denom = residual_t0 + ai
         if denom <= 0 or not np.isfinite(denom):
             return float("nan")
         return round(self.price / denom * 100.0, 1)
+
+
+
 
 # =========================
 # Helpers de parsing Excel
