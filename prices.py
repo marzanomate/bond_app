@@ -200,8 +200,8 @@ class bond_calculator_pro:
     
         cpns = [0.0]  # en t0 no hay cupón
         for i in range(1, len(rates)):
-            rate_interval = rates[i-1]            # tasa del período (t_{i-1}, t_i]
-            base = residuals[i-1]                 # saldo al inicio del período (ya neto de amort en t_{i-1})
+            rate_interval = rates[i]            # tasa del período (t_{i-1}, t_i]
+            base = residuals[i]                 # saldo al inicio del período (ya neto de amort en t_{i-1})
             cpns.append((rate_interval / 2) * base)
     
         self._cache[key] = cpns
