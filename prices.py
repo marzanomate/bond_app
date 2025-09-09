@@ -803,39 +803,55 @@ def manual_bonds_factory(df_all):
 # =========================
 def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.DataFrame:
     """
-    Devuelve una tabla agregada por fecha con columnas:
-    - Cupón: suma de cupones (ya escalados) de todos los bonos seleccionados
-    - Capital: suma de amortizaciones (ya escaladas)
-    - Total: Cupón + Capital
-
-    Notas:
-    - Se excluye la primera fila (precio) => solo pagos futuros
-    - mode = "Nominal"  => inputs[b.name] = <VN>
-    - mode = "Monto"    => inputs[b.name] = {"monto": <float>, "precio": <float|None>}
-                           (si precio es None/0 usa b.price)
-    - Todo se redondea a 1 decimal
+    Agrega por fecha y devuelve columnas: Cupón, Capital, Total.
+    - Excluye la 1ª fila (precio/settlement)
+    - mode:
+        "Nominal" -> inputs[b.name] = <VN>
+        "Monto"   -> inputs[b.name] = {"monto": <float>, "precio": <float|None>}
+                     (si precio es None/0 usa b.price)
+    - Redondea a 1 decimal.
     """
+    if not selected_bonds:
+        return pd.DataFrame(columns=["Fecha", "Cupón", "Capital", "Total"])
+
     rows = []
     mode_norm = (mode or "").strip().lower()
+    warnings = []
 
     for b in selected_bonds:
-        # Fechas y flujos por componente (sin el primer registro de settlement/precio)
-        dates   = b.generate_payment_dates()[1:]
-        coupons = b.coupon_payments()[1:]
+        # Fechas + componentes (sin la fila de precio)
+        dates    = b.generate_payment_dates()[1:]
+        coupons  = b.coupon_payments()[1:]
         capitals = b.amortization_payments()[1:]
 
-        # Factor de escala (VN/100 o Monto/Precio)
+        # --- calcular factor ---
+        factor = 0.0
         if mode_norm == "nominal":
-            vn = float(inputs.get(b.name, 0) or 0.0)
+            vn = inputs.get(b.name, 0)
+            try:
+                vn = float(vn or 0.0)
+            except Exception:
+                vn = 0.0
             factor = vn / 100.0
+
         elif mode_norm == "monto":
-            user_data = inputs.get(b.name, {}) or {}
-            monto = float(user_data.get("monto", 0) or 0.0)
+            user_data = inputs.get(b.name) or {}
+            try:
+                monto = float(user_data.get("monto", 0) or 0.0)
+            except Exception:
+                monto = 0.0
             p_manual = user_data.get("precio", None)
-            price_used = float(p_manual) if (p_manual is not None and p_manual > 0) else float(b.price)
+            try:
+                price_used = float(p_manual) if (p_manual is not None and float(p_manual) > 0) else float(b.price)
+            except Exception:
+                price_used = float(b.price)
             factor = (monto / price_used) if (price_used and price_used == price_used) else 0.0
         else:
-            factor = 0.0  # modo inválido => 0
+            warnings.append("Modo inválido. Use 'Nominal' o 'Monto'.")
+            factor = 0.0
+
+        if factor == 0.0:
+            warnings.append(f"Factor = 0 para {b.name}. Revise el VN / Monto y Precio.")
 
         for d, cpn, cap in zip(dates, coupons, capitals):
             rows.append({
@@ -848,21 +864,23 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
         return pd.DataFrame(columns=["Fecha", "Cupón", "Capital", "Total"])
 
     df = pd.DataFrame(rows)
-    # Agregado por fecha
-    df_sum = df.groupby("Fecha", as_index=False)[["Cupón", "Capital"]].sum()
-    df_sum["Total"] = (df_sum["Cupón"] + df_sum["Capital"]).round(1)
+    out = (
+        df.groupby("Fecha", as_index=False)[["Cupón", "Capital"]]
+          .sum()
+          .assign(Total=lambda x: (x["Cupón"] + x["Capital"]).round(1))
+          .sort_values("Fecha")
+          .reset_index(drop=True)
+    )
 
-    # Orden cronológico
-    try:
-        df_sum = df_sum.sort_values("Fecha").reset_index(drop=True)
-    except Exception:
-        pass
+    # Si querés ver warnings en la app, devolvelos/mostralos aparte:
+    if warnings:
+        st.info(" · ".join(sorted(set(warnings))))
 
-    # Asegurar 1 decimal en todas las columnas numéricas
+    # asegurar 1 decimal
     for col in ["Cupón", "Capital", "Total"]:
-        df_sum[col] = pd.to_numeric(df_sum[col], errors="coerce").round(1)
+        out[col] = pd.to_numeric(out[col], errors="coerce").round(1)
 
-    return df_sum
+    return out
 # =========================
 # Calculadora de métricas (3 bonos, precio manual)
 # =========================
@@ -946,6 +964,7 @@ def main():
         # 2) SIMULADOR DE FLUJOS
         # =========================
         st.subheader("Simulador de Flujos (sin desembolso inicial)")
+        
         colA, colB = st.columns([1, 2])
         with colA:
             sel_bonds = st.multiselect(
@@ -953,18 +972,27 @@ def main():
                 options=sorted(name_to_bond.keys()),
                 default=[]
             )
-            mode = st.radio("Modo de entrada", ["Nominales", "Monto"], horizontal=True, index=0)
+            mode = st.radio("Modo de entrada", ["Nominal", "Monto"], horizontal=True, index=0)
+        
         with colB:
             inputs = {}
             if sel_bonds:
                 st.write("Parámetros por bono:")
                 for n in sel_bonds:
-                    if mode == "Nominales":
-                        val = st.number_input(f"VN de {n}", min_value=0.0, step=100.0, value=0.0, key=f"vn_{n}")
-                    else:
-                        val = st.number_input(f"Monto (USD) para {n}", min_value=0.0, step=100.0, value=0.0, key=f"amt_{n}")
-                    inputs[n] = val
-
+                    if mode == "Nominal":
+                        vn = st.number_input(
+                            f"VN de {n}", min_value=0.0, step=100.0, value=0.0, key=f"vn_{n}"
+                        )
+                        inputs[n] = vn
+                    else:  # Monto
+                        monto = st.number_input(
+                            f"Monto (USD) para {n}", min_value=0.0, step=100.0, value=0.0, key=f"monto_{n}"
+                        )
+                        precio_manual = st.number_input(
+                            f"Precio manual (opcional) para {n}", min_value=0.0, step=0.1, value=0.0, key=f"precio_{n}"
+                        )
+                        inputs[n] = {"monto": monto, "precio": precio_manual if precio_manual > 0 else None}
+        
         if sel_bonds:
             selected_objs = [name_to_bond[n] for n in sel_bonds]
             df_cf = build_cashflow_table(selected_objs, mode, inputs)
@@ -973,7 +1001,7 @@ def main():
             st.markdown(html_cf, unsafe_allow_html=True)
         else:
             st.info("Seleccioná al menos un bono para ver flujos.")
-
+        
         st.divider()
 
         # =========================
