@@ -951,14 +951,24 @@ def main():
         
         if sel_bonds:
             selected_objs = [name_to_bond[n] for n in sel_bonds]
-            df_cf = build_cashflow_table(selected_objs, mode, inputs)
+            df_cf = build_cashflow_table(selected_objs, mode, inputs)  # ← devuelve Fecha, Cupón, Capital, Total
+        
             st.markdown("**Flujo consolidado por fecha (USD):**")
-            html_cf = center_table(df_cf)
-            st.markdown(html_cf, unsafe_allow_html=True)
+            st.dataframe(
+                df_cf,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Cupón":  st.column_config.NumberColumn(format="%.2f"),
+                    "Capital": st.column_config.NumberColumn(format="%.2f"),
+                    "Total":  st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
         else:
             st.info("Seleccioná al menos un bono para ver flujos.")
         
         st.divider()
+
 
         # =========================
         # 3) Calculadora de Métricas (3 bonos con precio manual)
