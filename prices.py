@@ -119,30 +119,46 @@ class bond_calculator_pro:
 
     # ---- perfil de capital ----
     def residual_value(self, settlement: Optional[datetime] = None) -> List[float]:
+        """
+        Devuelve el saldo de capital *después* de amortizar en cada fecha.
+        res[0] = 100 en settlement (no hay amort en t0).
+        Para i >= 1: res[i] = res[i-1] - amort(t_i)
+        """
         key = ("residual", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-
+    
         dates = self.generate_payment_dates(settlement)
-        amap = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
+        am_map = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
+    
         res = []
         R = 100.0
-        for d in dates:
-            if d in amap:
-                R = max(0.0, R - amap[d])
+        # t0 (settlement)
+        res.append(R)
+    
+        # fechas futuras
+        for d in dates[1:]:
+            R = max(0.0, R - am_map.get(d, 0.0))  # amortiza en la fecha
             res.append(R)
+    
         self._cache[key] = res
         return res
 
     def amortization_payments(self, settlement: Optional[datetime] = None) -> List[float]:
-        key = ("amorts", (settlement or 0))
-        if key in self._cache:
-            return self._cache[key]
-        dates = self.generate_payment_dates(settlement)
-        amap = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
-        out = [amap.get(d, 0.0) for d in dates]
-        self._cache[key] = out
-        return out
+    """
+    Vector alineado con las fechas: cap[0]=0 en settlement; cap[i]=amort en fecha_i.
+    """
+    key = ("amorts", (settlement or 0))
+    if key in self._cache:
+        return self._cache[key]
+
+    dates = self.generate_payment_dates(settlement)
+    am_map = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
+    caps = [0.0]  # en t0 no hay pago de capital
+    caps.extend([am_map.get(d, 0.0) for d in dates[1:]])
+
+    self._cache[key] = caps
+    return caps
 
     # ---- step-ups y cupones ----
     def step_up_rate(self, settlement: Optional[datetime] = None) -> List[float]:
@@ -170,15 +186,24 @@ class bond_calculator_pro:
         return out
 
     def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
+        """
+        Cupón del período (t_{i-1}, t_i] = tasa_del_período * saldo_al_inicio / frecuencia.
+        Usamos rates[i-1] para reflejar step-ups que cambian justo en t_i.
+        """
         key = ("coupons", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-        rates = self.step_up_rate(settlement)
-        residuals = self.residual_value(settlement)
-        cpns = [0.0]
+    
+        rates = self.step_up_rate(settlement)       # tasa “vigente en la fecha”
+        residuals = self.residual_value(settlement) # saldo post-amort por fecha
         f = self.frequency
+    
+        cpns = [0.0]  # en t0 no hay cupón
         for i in range(1, len(rates)):
-            cpns.append((rates[i] / f) * residuals[i + 1])
+            rate_interval = rates[i-1]            # tasa del período (t_{i-1}, t_i]
+            base = residuals[i-1]                 # saldo al inicio del período (ya neto de amort en t_{i-1})
+            cpns.append((rate_interval / f) * base)
+    
         self._cache[key] = cpns
         return cpns
 
