@@ -935,7 +935,8 @@ def main():
         
         # Mostrar DataFrame directo en Streamlit
         st.dataframe(
-            df_filtered.style.format("{:.1f}", subset=[
+            df_filtered.reset_index(drop = True)
+            .style.format("{:.1f}", subset=[
                 "Precio","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad"
             ]).set_properties(**{"text-align": "center"}).set_table_styles([
                 {"selector": "th", "props": [("text-align", "center")]}
