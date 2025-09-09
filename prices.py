@@ -56,7 +56,7 @@ class bond_calculator_pro:
         if pf <= 0:
             raise ValueError(f"{name}: payment_frequency must be > 0 (months).")
         self.payment_frequency = pf
-        self.frequency = max(1, int(round(12 / self.payment_frequency)))  # cupones/año
+        self.frequency = max(1, int(round(12 / self.payment_frequency,2)))  # cupones/año
 
         # Normalización de amortizaciones
         self.amortization_dates = [str(d) for d in amortization_dates]
