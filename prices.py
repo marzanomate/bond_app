@@ -910,6 +910,7 @@ def main():
 
         # Filtros
         colf1, colf2, colf3 = st.columns(3)
+        
         emisores = sorted([e for e in df_full["Emisor"].dropna().unique()])
         monedas  = sorted([m for m in df_full["Moneda de Pago"].dropna().unique()])
         leyes    = sorted([l for l in df_full["Ley"].dropna().unique()])
