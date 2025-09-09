@@ -178,7 +178,7 @@ class bond_calculator_pro:
         cpns = [0.0]
         f = self.frequency
         for i in range(1, len(rates)):
-            cpns.append((rates[i] / f) * residuals[i])
+            cpns.append((rates[i] / f) * residuals[i + 1])
         self._cache[key] = cpns
         return cpns
 
