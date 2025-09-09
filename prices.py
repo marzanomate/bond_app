@@ -145,20 +145,20 @@ class bond_calculator_pro:
         return res
 
     def amortization_payments(self, settlement: Optional[datetime] = None) -> List[float]:
-    """
-    Vector alineado con las fechas: cap[0]=0 en settlement; cap[i]=amort en fecha_i.
-    """
-    key = ("amorts", (settlement or 0))
-    if key in self._cache:
-        return self._cache[key]
-
-    dates = self.generate_payment_dates(settlement)
-    am_map = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
-    caps = [0.0]  # en t0 no hay pago de capital
-    caps.extend([am_map.get(d, 0.0) for d in dates[1:]])
-
-    self._cache[key] = caps
-    return caps
+        """
+        Vector alineado con las fechas: cap[0]=0 en settlement; cap[i]=amort en fecha_i.
+        """
+        key = ("amorts", (settlement or 0))
+        if key in self._cache:
+            return self._cache[key]
+    
+        dates = self.generate_payment_dates(settlement)
+        am_map = {d: float(a) for d, a in zip(self.amortization_dates, self.amortizations)}
+        caps = [0.0]  # en t0 no hay pago de capital
+        caps.extend([am_map.get(d, 0.0) for d in dates[1:]])
+    
+        self._cache[key] = caps
+        return caps
 
     # ---- step-ups y cupones ----
     def step_up_rate(self, settlement: Optional[datetime] = None) -> List[float]:
