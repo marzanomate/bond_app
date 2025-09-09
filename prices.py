@@ -802,28 +802,67 @@ def manual_bonds_factory(df_all):
 # Simulador de flujos
 # =========================
 def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.DataFrame:
+    """
+    Devuelve una tabla agregada por fecha con columnas:
+    - Cupón: suma de cupones (ya escalados) de todos los bonos seleccionados
+    - Capital: suma de amortizaciones (ya escaladas)
+    - Total: Cupón + Capital
+
+    Notas:
+    - Se excluye la primera fila (precio) => solo pagos futuros
+    - mode = "Nominal"  => inputs[b.name] = <VN>
+    - mode = "Monto"    => inputs[b.name] = {"monto": <float>, "precio": <float|None>}
+                           (si precio es None/0 usa b.price)
+    - Todo se redondea a 1 decimal
+    """
     rows = []
+    mode_norm = (mode or "").strip().lower()
+
     for b in selected_bonds:
-        # SIN el primer flujo (precio): solo pagos
-        dates = b.generate_payment_dates()[1:]
-        flows = b.cash_flow()[1:]
+        # Fechas y flujos por componente (sin el primer registro de settlement/precio)
+        dates   = b.generate_payment_dates()[1:]
+        coupons = b.coupon_payments()[1:]
+        capitals = b.amortization_payments()[1:]
 
-        if mode == "Nominales":
-            nominal = float(inputs.get(b.name, 0) or 0) / 100
-        else:  # "Monto"
-            monto = float(inputs.get(b.name, 0) or 0)
-            nominal = (monto / b.price) if (b.price and b.price == b.price) else 0.0
+        # Factor de escala (VN/100 o Monto/Precio)
+        if mode_norm == "nominal":
+            vn = float(inputs.get(b.name, 0) or 0.0)
+            factor = vn / 100.0
+        elif mode_norm == "monto":
+            user_data = inputs.get(b.name, {}) or {}
+            monto = float(user_data.get("monto", 0) or 0.0)
+            p_manual = user_data.get("precio", None)
+            price_used = float(p_manual) if (p_manual is not None and p_manual > 0) else float(b.price)
+            factor = (monto / price_used) if (price_used and price_used == price_used) else 0.0
+        else:
+            factor = 0.0  # modo inválido => 0
 
-        for d, f in zip(dates, flows):
-            rows.append({"Fecha": d, "Ticker": b.name, "Flujo": round(f * nominal, 1)})
+        for d, cpn, cap in zip(dates, coupons, capitals):
+            rows.append({
+                "Fecha": d,
+                "Cupón": round(cpn * factor, 1),
+                "Capital": round(cap * factor, 1),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=["Fecha", "Cupón", "Capital", "Total"])
 
     df = pd.DataFrame(rows)
-    if df.empty:
-        return pd.DataFrame(columns=["Fecha", "Total"])
-    df_total = df.groupby("Fecha", as_index=False)["Flujo"].sum()
-    df_total = df_total.rename(columns={"Flujo":"Total"})
-    df_total["Total"] = df_total["Total"].round(1)
-    return df_total
+    # Agregado por fecha
+    df_sum = df.groupby("Fecha", as_index=False)[["Cupón", "Capital"]].sum()
+    df_sum["Total"] = (df_sum["Cupón"] + df_sum["Capital"]).round(1)
+
+    # Orden cronológico
+    try:
+        df_sum = df_sum.sort_values("Fecha").reset_index(drop=True)
+    except Exception:
+        pass
+
+    # Asegurar 1 decimal en todas las columnas numéricas
+    for col in ["Cupón", "Capital", "Total"]:
+        df_sum[col] = pd.to_numeric(df_sum[col], errors="coerce").round(1)
+
+    return df_sum
 # =========================
 # Calculadora de métricas (3 bonos, precio manual)
 # =========================
