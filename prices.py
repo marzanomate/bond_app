@@ -802,85 +802,41 @@ def manual_bonds_factory(df_all):
 # Simulador de flujos
 # =========================
 def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.DataFrame:
-    """
-    Agrega por fecha y devuelve columnas: Cupón, Capital, Total.
-    - Excluye la 1ª fila (precio/settlement)
-    - mode:
-        "Nominal" -> inputs[b.name] = <VN>
-        "Monto"   -> inputs[b.name] = {"monto": <float>, "precio": <float|None>}
-                     (si precio es None/0 usa b.price)
-    - Redondea a 1 decimal.
-    """
-    if not selected_bonds:
-        return pd.DataFrame(columns=["Fecha", "Cupón", "Capital", "Total"])
-
     rows = []
-    mode_norm = (mode or "").strip().lower()
-    warnings = []
-
     for b in selected_bonds:
-        # Fechas + componentes (sin la fila de precio)
-        dates    = b.generate_payment_dates()[1:]
-        coupons  = b.coupon_payments()[1:]
+        # SIN el primer flujo (precio): solo pagos
+        dates = b.generate_payment_dates()[1:]
+        coupons = b.coupon_payments()[1:]
         capitals = b.amortization_payments()[1:]
 
-        # --- calcular factor ---
-        factor = 0.0
-        if mode_norm == "nominal":
-            vn = inputs.get(b.name, 0)
-            try:
-                vn = float(vn or 0.0)
-            except Exception:
-                vn = 0.0
-            factor = vn / 100.0
-
-        elif mode_norm == "monto":
-            user_data = inputs.get(b.name) or {}
-            try:
-                monto = float(user_data.get("monto", 0) or 0.0)
-            except Exception:
-                monto = 0.0
-            p_manual = user_data.get("precio", None)
-            try:
-                price_used = float(p_manual) if (p_manual is not None and float(p_manual) > 0) else float(b.price)
-            except Exception:
-                price_used = float(b.price)
-            factor = (monto / price_used) if (price_used and price_used == price_used) else 0.0
-        else:
-            warnings.append("Modo inválido. Use 'Nominal' o 'Monto'.")
-            factor = 0.0
-
-        if factor == 0.0:
-            warnings.append(f"Factor = 0 para {b.name}. Revise el VN / Monto y Precio.")
+        if mode == "Nominal":
+            nominal = float(inputs.get(b.name, 0) or 0) / 100
+        else:  # Monto
+            user_in = inputs.get(b.name, {})
+            monto = float(user_in.get("monto", 0) or 0)
+            precio_manual = user_in.get("precio", None)
+            precio = precio_manual if precio_manual else b.price
+            nominal = (monto / precio) if (precio and precio == precio) else 0.0
 
         for d, cpn, cap in zip(dates, coupons, capitals):
             rows.append({
                 "Fecha": d,
-                "Cupón": round(cpn * factor, 1),
-                "Capital": round(cap * factor, 1),
+                "Ticker": b.name,
+                "Cupón": round(cpn * nominal, 2),
+                "Capital": round(cap * nominal, 2),
+                "Total": round((cpn + cap) * nominal, 2)
             })
 
-    if not rows:
+    df = pd.DataFrame(rows)
+    if df.empty:
         return pd.DataFrame(columns=["Fecha", "Cupón", "Capital", "Total"])
 
-    df = pd.DataFrame(rows)
-    out = (
-        df.groupby("Fecha", as_index=False)[["Cupón", "Capital"]]
-          .sum()
-          .assign(Total=lambda x: (x["Cupón"] + x["Capital"]).round(1))
-          .sort_values("Fecha")
-          .reset_index(drop=True)
-    )
+    df_total = df.groupby("Fecha", as_index=False)[["Cupón", "Capital", "Total"]].sum()
+    df_total["Cupón"] = df_total["Cupón"].round(2)
+    df_total["Capital"] = df_total["Capital"].round(2)
+    df_total["Total"] = df_total["Total"].round(2)
 
-    # Si querés ver warnings en la app, devolvelos/mostralos aparte:
-    if warnings:
-        st.info(" · ".join(sorted(set(warnings))))
-
-    # asegurar 1 decimal
-    for col in ["Cupón", "Capital", "Total"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce").round(1)
-
-    return out
+    return df_total
 # =========================
 # Calculadora de métricas (3 bonos, precio manual)
 # =========================
