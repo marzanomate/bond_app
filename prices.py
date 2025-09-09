@@ -933,9 +933,15 @@ def main():
         )
         df_filtered = df_full.loc[mask].reset_index(drop=True)
         
-        # Render centrado y 1 decimal
-        html_tbl = center_table(df_filtered)
-        st.markdown(html_tbl, unsafe_allow_html=True)
+        # Mostrar DataFrame directo en Streamlit
+        st.dataframe(
+            df_filtered.style.format("{:.1f}", subset=[
+                "Precio","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad"
+            ]).set_properties(**{"text-align": "center"}).set_table_styles([
+                {"selector": "th", "props": [("text-align", "center")]}
+            ]),
+            use_container_width=True
+        )
 
         st.divider()
 
