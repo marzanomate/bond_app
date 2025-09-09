@@ -202,8 +202,8 @@ class bond_calculator_pro:
             out.append(r)
         self._cache[key] = out
         return out
-
-   def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
+        
+    def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
         """
         Cupón en t_i = (tasa del período (t_{i-1}, t_i]) * (saldo al inicio del período) / frecuencia.
         Usamos rates[i-1] y residuals[i-1].
@@ -211,17 +211,17 @@ class bond_calculator_pro:
         key = ("coupons", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-
+        
         rates = self.step_up_rate(settlement)
         residuals = self.residual_value(settlement)
         f = self.frequency
-
+        
         cpns = [0.0]  # en t0 no hay cupón
         for i in range(1, len(rates)):
             rate_interval = float(rates[i-1])   # tasa del período anterior
             base = float(residuals[i-1])        # saldo al inicio del período
             cpns.append((rate_interval / f) * base)
-
+        
         self._cache[key] = cpns
         return cpns
 
