@@ -948,12 +948,12 @@ def main():
 
         # Filtros
         colf1, colf2, colf3, colf4 = st.columns(4)
-        
+
         emisores = sorted([e for e in df_full["Emisor"].dropna().unique()])
         monedas  = sorted([m for m in df_full["Moneda de Pago"].dropna().unique()])
         leyes    = sorted([l for l in df_full["Ley"].dropna().unique()])
         tickers  = sorted([t for t in df_full["Ticker"].dropna().unique()])
-        
+
         with colf1:
             f_emisor = st.multiselect("Filtrar Emisor", emisores, default=emisores)
         with colf2:
@@ -962,7 +962,7 @@ def main():
             f_ley    = st.multiselect("Filtrar Ley", leyes, default=leyes)
         with colf4:
             f_ticker = st.multiselect("Filtrar Ticker", tickers, default=tickers)
-        
+
         mask = (
             df_full["Emisor"].isin(f_emisor)
             & df_full["Moneda de Pago"].isin(f_moneda)
@@ -970,7 +970,7 @@ def main():
             & df_full["Ticker"].isin(f_ticker)
         )
         df_filtered = df_full.loc[mask].reset_index(drop=True)
-        
+
         # Mostrar DataFrame directo en Streamlit
         st.dataframe(
             df_filtered.style.format({
@@ -993,7 +993,7 @@ def main():
         # 2) SIMULADOR DE FLUJOS
         # =========================
         st.subheader("Simulador de Flujos")
-        
+
         colA, colB = st.columns([1, 2])
         with colA:
             sel_bonds = st.multiselect(
@@ -1002,7 +1002,7 @@ def main():
                 default=[]
             )
             mode = st.radio("Modo de entrada", ["Nominal", "Monto"], horizontal=True, index=0)
-        
+
         with colB:
             inputs = {}
             if sel_bonds:
@@ -1021,11 +1021,11 @@ def main():
                             f"Precio manual (opcional) para {n}", min_value=0.0, step=0.1, value=0.0, key=f"precio_{n}"
                         )
                         inputs[n] = {"monto": monto, "precio": precio_manual if precio_manual > 0 else None}
-        
+
         if sel_bonds:
             selected_objs = [name_to_bond[n] for n in sel_bonds]
             df_cf = build_cashflow_table(selected_objs, mode, inputs)  # ← devuelve Fecha, Cupón, Capital, Total
-        
+
             st.markdown("**Flujo consolidado por fecha (USD):**")
             st.dataframe(
                 df_cf,
@@ -1039,9 +1039,8 @@ def main():
             )
         else:
             st.info("Seleccioná al menos un bono para ver flujos.")
-        
-        st.divider()
 
+        st.divider()
 
         # =========================
         # 3) Calculadora de Métricas
@@ -1061,7 +1060,7 @@ def main():
                     "Modified Duration": b.modified_duration(settlement),
                     "Convexidad": b.convexity(settlement),
                     "Paridad": b.parity(settlement),
-                    "Current Yield": b.current_yield(settlement),   # <-- incluir
+                    "Current Yield": b.current_yield(settlement),
                 }
                 # redondeo a 1 decimal
                 for k in ("TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"):
@@ -1070,50 +1069,49 @@ def main():
             finally:
                 b.price = old_price
 
-        
         st.subheader("Comparador de Métricas (3 bonos)")
-            col1, col2, col3 = st.columns(3)
-            choices = sorted(name_to_bond.keys())
-            
-            with col1:
-                b1_name = st.selectbox("Bono 1", choices, index=0, key="cmp_b1")
-                p1 = st.number_input("Precio manual 1 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p1")
-            with col2:
-                b2_name = st.selectbox("Bono 2", choices, index=1, key="cmp_b2")
-                p2 = st.number_input("Precio manual 2 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p2")
-            with col3:
-                b3_name = st.selectbox("Bono 3", choices, index=2, key="cmp_b3")
-                p3 = st.number_input("Precio manual 3 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p3")
-            
-            if st.button("Calcular comparativa"):
-                rows = []
-                for nm, pv in [(b1_name, p1), (b2_name, p2), (b3_name, p3)]:
-                    if not nm: 
-                        continue
-                    b = name_to_bond[nm]
-                    price_override = pv if pv and pv > 0 else None
-                    rows.append(compute_metrics_with_price(b, price_override))
-                if rows:
-                    df_cmp = pd.DataFrame(rows, columns=[
-                        "Ticker","Precio usado","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"
-                    ])
-                    st.dataframe(
-                        df_cmp.style.format({
-                            "Precio usado": "{:.1f}",
-                            "TIR": "{:.1f}",
-                            "TNA SA": "{:.1f}",
-                            "Duration": "{:.1f}",
-                            "Modified Duration": "{:.1f}",
-                            "Convexidad": "{:.1f}",
-                            "Paridad": "{:.1f}",
-                            "Current Yield": "{:.1f}",
-                        }),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.info("Elegí al menos un bono.")
-        
+        col1, col2, col3 = st.columns(3)
+        choices = sorted(name_to_bond.keys())
+
+        with col1:
+            b1_name = st.selectbox("Bono 1", choices, index=0, key="cmp_b1")
+            p1 = st.number_input("Precio manual 1 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p1")
+        with col2:
+            b2_name = st.selectbox("Bono 2", choices, index=1, key="cmp_b2")
+            p2 = st.number_input("Precio manual 2 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p2")
+        with col3:
+            b3_name = st.selectbox("Bono 3", choices, index=2, key="cmp_b3")
+            p3 = st.number_input("Precio manual 3 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p3")
+
+        if st.button("Calcular comparativa"):
+            rows = []
+            for nm, pv in [(b1_name, p1), (b2_name, p2), (b3_name, p3)]:
+                if not nm:
+                    continue
+                b = name_to_bond[nm]
+                price_override = pv if pv and pv > 0 else None
+                rows.append(compute_metrics_with_price(b, price_override))
+            if rows:
+                df_cmp = pd.DataFrame(rows, columns=[
+                    "Ticker","Precio usado","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"
+                ])
+                st.dataframe(
+                    df_cmp.style.format({
+                        "Precio usado": "{:.1f}",
+                        "TIR": "{:.1f}",
+                        "TNA SA": "{:.1f}",
+                        "Duration": "{:.1f}",
+                        "Modified Duration": "{:.1f}",
+                        "Convexidad": "{:.1f}",
+                        "Paridad": "{:.1f}",
+                        "Current Yield": "{:.1f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("Elegí al menos un bono.")
+
     elif page == "Lecaps":
         st.title("Lecaps")
         st.info("Sección en construcción. Próximamente métricas y simuladores para Lecaps.")
@@ -1122,7 +1120,6 @@ def main():
         st.title("Otros")
         st.info("Sección en construcción para otros instrumentos y herramientas.")
 
+
 if __name__ == "__main__":
     main()
-
-
