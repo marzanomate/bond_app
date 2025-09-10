@@ -1046,32 +1046,81 @@ def main():
         # =========================
         # 3) Calculadora de Métricas
         # =========================
-        st.subheader("Comparador de Métricas")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            b1 = st.selectbox("Bono 1", [""] + sorted(name_to_bond.keys()), index=0, key="cmp_b1")
-            p1 = st.number_input("Precio 1", min_value=0.0, step=0.1, value=0.0, key="cmp_p1")
-        with c2:
-            b2 = st.selectbox("Bono 2", [""] + sorted(name_to_bond.keys()), index=0, key="cmp_b2")
-            p2 = st.number_input("Precio 2", min_value=0.0, step=0.1, value=0.0, key="cmp_p2")
-        with c3:
-            b3 = st.selectbox("Bono 3", [""] + sorted(name_to_bond.keys()), index=0, key="cmp_b3")
-            p3 = st.number_input("Precio 3", min_value=0.0, step=0.1, value=0.0, key="cmp_p3")
+        def compute_metrics_with_price(b: bond_calculator_pro, price_override: float | None = None, settlement=None) -> dict:
+            # Clonado liviano con override de precio
+            old_price = b.price
+            try:
+                if price_override is not None and price_override > 0:
+                    b.price = float(price_override)
+                row = {
+                    "Ticker": b.name,
+                    "Precio usado": round(b.price, 1),
+                    "TIR": b.xirr(settlement),
+                    "TNA SA": b.tna_180(settlement),
+                    "Duration": b.duration(settlement),
+                    "Modified Duration": b.modified_duration(settlement),
+                    "Convexidad": b.convexity(settlement),
+                    "Paridad": b.parity(settlement),
+                    "Current Yield": b.current_yield(settlement),   # <-- incluir
+                }
+                # redondeo a 1 decimal
+                for k in ("TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"):
+                    row[k] = round(pd.to_numeric(row[k], errors="coerce"), 1)
+                return row
+            finally:
+                b.price = old_price
 
-        if any([b1, b2, b3]):
-            df_cmp = compare_metrics_three(name_to_bond, [b1, b2, b3], [p1, p2, p3])
-            st.markdown("**Métricas comparadas (con precios manuales):**")
-            st.markdown(center_table(df_cmp), unsafe_allow_html=True)
-        else:
-            st.info("Elegí al menos un bono y definí precios para comparar.")
-
-    elif page == "Lecaps":
-        st.title("Lecaps")
-        st.info("Sección en construcción. Próximamente métricas y simuladores para Lecaps.")
-
-    else:
-        st.title("Otros")
-        st.info("Sección en construcción para otros instrumentos y herramientas.")
+        
+        st.subheader("Comparador de Métricas (3 bonos)")
+        col1, col2, col3 = st.columns(3)
+        choices = sorted(name_to_bond.keys())
+        
+        with col1:
+            b1_name = st.selectbox("Bono 1", choices, index=0, key="cmp_b1")
+            p1 = st.number_input("Precio manual 1 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p1")
+        with col2:
+            b2_name = st.selectbox("Bono 2", choices, index=1, key="cmp_b2")
+            p2 = st.number_input("Precio manual 2 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p2")
+        with col3:
+            b3_name = st.selectbox("Bono 3", choices, index=2, key="cmp_b3")
+            p3 = st.number_input("Precio manual 3 (opcional)", min_value=0.0, step=0.1, value=0.0, key="cmp_p3")
+        
+        if st.button("Calcular comparativa"):
+            rows = []
+            for nm, pv in [(b1_name, p1), (b2_name, p2), (b3_name, p3)]:
+                if not nm: 
+                    continue
+                b = name_to_bond[nm]
+                price_override = pv if pv and pv > 0 else None
+                rows.append(compute_metrics_with_price(b, price_override))
+            if rows:
+                df_cmp = pd.DataFrame(rows, columns=[
+                    "Ticker","Precio usado","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"
+                ])
+                st.dataframe(
+                    df_cmp.style.format({
+                        "Precio usado": "{:.1f}",
+                        "TIR": "{:.1f}",
+                        "TNA SA": "{:.1f}",
+                        "Duration": "{:.1f}",
+                        "Modified Duration": "{:.1f}",
+                        "Convexidad": "{:.1f}",
+                        "Paridad": "{:.1f}",
+                        "Current Yield": "{:.1f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("Elegí al menos un bono.")
+        
+            elif page == "Lecaps":
+                st.title("Lecaps")
+                st.info("Sección en construcción. Próximamente métricas y simuladores para Lecaps.")
+        
+            else:
+                st.title("Otros")
+                st.info("Sección en construcción para otros instrumentos y herramientas.")
 
 if __name__ == "__main__":
     main()
