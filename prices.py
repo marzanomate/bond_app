@@ -1053,7 +1053,7 @@ def main():
                     b.price = float(price_override)
                 row = {
                     "Ticker": b.name,
-                    "Precio usado": round(b.price, 1),
+                    "Precio": round(b.price, 1),
                     "TIR": b.xirr(settlement),
                     "TNA SA": b.tna_180(settlement),
                     "Duration": b.duration(settlement),
@@ -1093,11 +1093,11 @@ def main():
                 rows.append(compute_metrics_with_price(b, price_override))
             if rows:
                 df_cmp = pd.DataFrame(rows, columns=[
-                    "Ticker","Precio usado","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"
+                    "Ticker","Precio","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"
                 ])
                 st.dataframe(
                     df_cmp.style.format({
-                        "Precio usado": "{:.1f}",
+                        "Precio": "{:.1f}",
                         "TIR": "{:.1f}",
                         "TNA SA": "{:.1f}",
                         "Duration": "{:.1f}",
