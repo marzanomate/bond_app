@@ -1111,7 +1111,95 @@ def main():
                 )
             else:
                 st.info("Elegí al menos un bono.")
+        
+        # =========================
+        # 4) Curvas comparadas por Emisor (TIR vs Modified Duration)
+        # =========================
+        st.subheader("Curvas comparadas por Emisor (TIR vs Modified Duration)")
 
+        # Parto de las métricas ya calculadas (o recalculo por seguridad)
+        df_metrics = metrics_bcp(all_bonds).copy()
+
+        # Emitores disponibles
+        emisores_all = sorted([e for e in df_metrics["Emisor"].dropna().unique()])
+
+        colc1, colc2, colc3 = st.columns([1,1,2])
+        with colc1:
+            em1 = st.selectbox("Emisor A", emisores_all, index=0, key="curve_em1")
+        with colc2:
+            # por defecto un emisor diferente a em1 si existe
+            idx_default = 1 if len(emisores_all) > 1 else 0
+            em2 = st.selectbox("Emisor B", emisores_all, index=idx_default, key="curve_em2")
+        with colc3:
+            st.caption("Gráfico: eje X = Modified Duration | eje Y = TIR (e.a. %)")
+
+        # Filtro por los dos emisores seleccionados
+        emisores_sel = [em1, em2] if em1 != em2 else [em1]
+        df_curves = df_metrics[df_metrics["Emisor"].isin(emisores_sel)].copy()
+
+        # Asegurar numéricos y 1 decimal para la tabla
+        for c in ["TIR", "Modified Duration", "Precio", "TNA SA", "Convexidad", "Paridad", "Current Yield"]:
+            if c in df_curves.columns:
+                df_curves[c] = pd.to_numeric(df_curves[c], errors="coerce")
+
+        # Scatter interactivo
+        if not df_curves.empty:
+            fig = px.scatter(
+                df_curves,
+                x="Modified Duration",
+                y="TIR",
+                color="Emisor",
+                symbol="Emisor",
+                hover_name="Ticker",
+                hover_data={
+                    "Emisor": True,
+                    "Ticker": False,
+                    "Ley": True,
+                    "Moneda de Pago": True,
+                    "Precio": ":.1f",
+                    "TIR": ":.1f",
+                    "TNA SA": ":.1f",
+                    "Modified Duration": ":.1f",
+                    "Convexidad": ":.1f",
+                    "Paridad": ":.1f",
+                    "Current Yield": ":.1f",
+                },
+                size_max=12,
+            )
+            fig.update_traces(marker=dict(size=12, line=dict(width=1)))
+            fig.update_layout(
+                xaxis_title="Modified Duration (años)",
+                yaxis_title="TIR (%)",
+                legend_title="Emisor",
+                height=480,
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Tabla debajo (1 decimal, sin índice)
+            st.markdown("**Bonos incluidos en las curvas:**")
+            cols_show = [
+                "Ticker","Emisor","Ley","Moneda de Pago","Precio",
+                "TIR","TNA SA","Modified Duration","Convexidad","Paridad","Current Yield",
+                "Próxima Fecha de Pago","Fecha de Vencimiento"
+            ]
+            cols_show = [c for c in cols_show if c in df_curves.columns]
+            st.dataframe(
+                df_curves[cols_show].style.format({
+                    "Precio": "{:.1f}",
+                    "TIR": "{:.1f}",
+                    "TNA SA": "{:.1f}",
+                    "Modified Duration": "{:.1f}",
+                    "Convexidad": "{:.1f}",
+                    "Paridad": "{:.1f}",
+                    "Current Yield": "{:.1f}",
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No hay bonos para los emisores seleccionados.")
+            
     elif page == "Lecaps":
         st.title("Lecaps")
         st.info("Sección en construcción. Próximamente métricas y simuladores para Lecaps.")
