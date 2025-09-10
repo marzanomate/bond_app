@@ -3,6 +3,7 @@ import io
 import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
+import plotly.express as px
 
 import numpy as np
 import pandas as pd
