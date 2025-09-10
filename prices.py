@@ -398,7 +398,33 @@ class bond_calculator_pro:
             return float("nan")
         return round(self.price / denom * 100.0, 1)
 
+    def current_yield(self, settlement: Optional[datetime] = None) -> float:
 
+        stl = self._settlement(settlement)
+        dates = [datetime.strptime(s, "%Y-%m-%d") for s in self.generate_payment_dates(settlement)]
+        if len(dates) < 2:
+            return float("nan")
+
+        # Próxima fecha de cupón
+        next_coupon = dates[1]
+        prev_coupon = dates[0]
+
+        # Base de cálculo: residual al inicio del período
+        residuals = self.residual_value(settlement)
+        base = residuals[0]
+
+        # Tasa del período (considerando step-ups)
+        rates = self.step_up_rate(settlement)
+        r = rates[1]  # tasa vigente para este período
+
+        # Cupón del próximo período (por 100 VN)
+        coupon_next = (r / self.frequency) * base
+
+        # Anualizar: multiplicar por frecuencia
+        coupon_annual = coupon_next * self.frequency
+
+        # Current Yield sobre precio de mercado
+        return round((coupon_annual / self.price) * 100.0, 1) 
 
 
 # =========================
@@ -590,41 +616,53 @@ def load_bcp_from_excel(
 # =========================
 def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame:
     rows = []
+    stl = settlement
     for b in bonds:
         try:
-            dates = b.generate_payment_dates(settlement)
+            dates = b.generate_payment_dates(stl)
             prox = dates[1] if len(dates) > 1 else None
             rows.append({
                 "Ticker": b.name,
                 "Emisor": b.emisor,
                 "Ley": b.law,
                 "Moneda de Pago": b.curr,
-                "Precio": round(b.price, 1) if pd.notna(b.price) else np.nan,
-                "TIR": round(b.xirr(settlement), 1) if pd.notna(b.price) else np.nan,
-                "TNA SA": round(b.tna_180(settlement), 1) if pd.notna(b.price) else np.nan,
-                "Modified Duration": round(b.modified_duration(settlement), 1) if pd.notna(b.price) else np.nan,
-                "Duration": round(b.duration(settlement), 1) if pd.notna(b.price) else np.nan,
-                "Convexidad": round(b.convexity(settlement), 1) if pd.notna(b.price) else np.nan,
-                "Paridad": round(b.parity(settlement), 1) if pd.notna(b.price) else np.nan,
+                "Precio": round(b.price, 1),
+                "TIR": b.xirr(stl),
+                "TNA SA": b.tna_180(stl),
+                "Modified Duration": b.modified_duration(stl),
+                "Duration": b.duration(stl),
+                "Convexidad": b.convexity(stl),
+                "Paridad": b.parity(stl),
+                "Current Yield": b.current_yield(stl),   # <-- NUEVO
                 "Calificación": b.calificacion,
                 "Próxima Fecha de Pago": prox,
                 "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d"),
             })
-        except Exception:
+        except Exception as e:
             rows.append({
-                "Ticker": b.name, "Emisor": b.emisor, "Ley": b.law, "Moneda de Pago": b.curr,
-                "Precio": np.nan, "TIR": np.nan, "TNA SA": np.nan, "Modified Duration": np.nan,
+                "Ticker": getattr(b, "name", np.nan),
+                "Emisor": getattr(b, "emisor", np.nan),
+                "Ley": getattr(b, "law", np.nan),
+                "Moneda de Pago": getattr(b, "curr", np.nan),
+                "Precio": round(getattr(b, "price", np.nan), 1) if hasattr(b, "price") else np.nan,
+                "TIR": np.nan, "TNA SA": np.nan, "Modified Duration": np.nan,
                 "Duration": np.nan, "Convexidad": np.nan, "Paridad": np.nan,
-                "Calificación": b.calificacion,
+                "Current Yield": np.nan,                  # <-- NUEVO
+                "Calificación": getattr(b, "calificacion", np.nan),
                 "Próxima Fecha de Pago": None,
-                "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d"),
+                "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d") if hasattr(b, "end_date") else None,
             })
+            print(f"⚠️ {getattr(b, 'name', '?')}: {e}")
+
     df = pd.DataFrame(rows)
-    # 1 decimal garantizado
-    num_cols = ["Precio","TIR","TNA SA","Modified Duration","Duration","Convexidad","Paridad"]
-    for c in num_cols:
+
+    # formateo numérico a 1 decimal
+    for c in ["TIR","TNA SA","Paridad","Current Yield"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
-    return df
+    for c in ["Duration","Modified Duration","Convexidad","Precio"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
+
+    return df.reset_index(drop=True)
 
 def center_table(df: pd.DataFrame) -> str:
     # Render simple con HTML centrado y 1 decimal
@@ -935,13 +973,18 @@ def main():
         
         # Mostrar DataFrame directo en Streamlit
         st.dataframe(
-            df_filtered.reset_index(drop = True)
-            .style.format("{:.1f}", subset=[
-                "Precio","TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad"
-            ]).set_properties(**{"text-align": "center"}).set_table_styles([
-                {"selector": "th", "props": [("text-align", "center")]}
-            ]),
-            use_container_width=True
+            df_filtered.style.format({
+                "Precio": "{:.1f}",
+                "TIR": "{:.1f}",
+                "TNA SA": "{:.1f}",
+                "Duration": "{:.1f}",
+                "Modified Duration": "{:.1f}",
+                "Convexidad": "{:.1f}",
+                "Paridad": "{:.1f}",
+                "Current Yield": "{:.1f}",
+            }),
+            use_container_width=True,
+            hide_index=True
         )
 
         st.divider()
