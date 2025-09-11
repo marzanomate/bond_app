@@ -495,45 +495,33 @@ def to_df(payload):
                 break
     return pd.json_normalize(payload)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=1200)  # 1200 segundos = 20 minutos
 def load_market_data():
     url_bonds = "https://data912.com/live/arg_bonds"
     url_notes = "https://data912.com/live/arg_notes"
     url_corps = "https://data912.com/live/arg_corp"
-    # url_mep = "https://data912.com/live/mep"  # si lo necesitás luego
+    url_mep = "https://data912.com/live/mep"
 
-    data_bonds = fetch_json(url_bonds)
-    data_notes = fetch_json(url_notes)
-    data_corps = fetch_json(url_corps)
+    def fetch_json(url):
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        return r.json()
 
-    df_bonds = to_df(data_bonds)
-    df_notes = to_df(data_notes)
-    df_corps = to_df(data_corps)
+    def to_df(payload):
+        if isinstance(payload, dict):
+            for key in ("data", "results", "items", "bonds", "notes"):
+                if key in payload and isinstance(payload[key], list):
+                    payload = payload[key]
+                    break
+        return pd.json_normalize(payload)
 
-    df_bonds["source"] = "bonds"
-    df_notes["source"] = "notes"
-    df_corps["source"] = "corps"
+    df_bonds = to_df(fetch_json(url_bonds)); df_bonds["source"] = "bonds"
+    df_notes = to_df(fetch_json(url_notes)); df_notes["source"] = "notes"
+    df_corps = to_df(fetch_json(url_corps)); df_corps["source"] = "corps"
+    df_mep   = to_df(fetch_json(url_mep));   df_mep["source"]   = "mep"
 
     df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
-
-    # Normalizo columnas esperadas
-    # busco 'ticker' y 'bid'/'ask' comunes
-    if "ticker" in df_all.columns:
-        df_all["symbol"] = df_all["ticker"].astype(str)
-    elif "symbol" not in df_all.columns:
-        df_all["symbol"] = ""
-
-    if "bid" in df_all.columns:
-        df_all["px_bid"] = pd.to_numeric(df_all["bid"], errors="coerce")
-    elif "px_bid" not in df_all.columns:
-        df_all["px_bid"] = np.nan
-
-    if "ask" in df_all.columns:
-        df_all["px_ask"] = pd.to_numeric(df_all["ask"], errors="coerce")
-    elif "px_ask" not in df_all.columns:
-        df_all["px_ask"] = np.nan
-
-    return df_all
+    return df_all, df_mep
 
 def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> float:
     def _pick(row):
@@ -925,10 +913,10 @@ def main():
     page = st.sidebar.radio("Elegí sección", ["Bonos HD", "Lecaps", "Otros"], index=0)
 
     # --- Carga de mercado + botón refrescar ---
-    df_all = load_market_data()
-    if st.sidebar.button("🔄 Actualizar precios"):
-        load_market_data.clear()  # limpia cache
-        df_all = load_market_data()
+    df_all, df_mep = load_market_data()
+    if st.sidebar.button("🔄 Actualizar ahora"):
+        load_market_data.clear()
+        df_all, df_mep = load_market_data()
         st.sidebar.success("Precios actualizados.")
 
     # --- Construcción de universos ---
