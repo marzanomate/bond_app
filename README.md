@@ -1,6 +1,6 @@
-# A Panel to see different fixed incom metrics
+# A Panel to see different fixed income assets metrics
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+[![Open in Streamlit]([https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/](https://porabajo.streamlit.app/))
 
 ### How to run it on your own machine
 
