@@ -20,11 +20,6 @@ st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
 # Clase bond_calculator_pro
 # =========================
 
-from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-from typing import List, Optional, Dict, Any
-import numpy as np
-
 class bond_calculator_pro:
     """
     Bonos con cupón fijo y amortizaciones discretas (en % de 100),
@@ -431,6 +426,7 @@ class bond_calculator_pro:
 # =========================
 # Helpers de parsing Excel
 # =========================
+
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 def parse_date_cell(s):
@@ -481,6 +477,7 @@ def normalize_rate_to_percent(r):
 # =========================
 # Fetch precios (data912)
 # =========================
+
 @st.cache_data(ttl=300)
 def fetch_json(url):
     r = requests.get(url, timeout=20)
@@ -540,6 +537,7 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
 # =========================
 # Carga de ONs desde Excel
 # =========================
+
 @st.cache_data(ttl=600)
 def load_bcp_from_excel(
     df_all: pd.DataFrame,
@@ -603,6 +601,7 @@ def load_bcp_from_excel(
 # =========================
 # Tabla de métricas
 # =========================
+
 def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame:
     rows = []
     stl = settlement
@@ -666,6 +665,7 @@ def center_table(df: pd.DataFrame) -> str:
 # =========================
 # Manual: lista de soberanos
 # =========================
+
 def manual_bonds_factory(df_all):
     def px(sym): 
         try: return get_price_for_symbol(df_all, sym, prefer="px_bid")
@@ -838,10 +838,111 @@ def manual_bonds_factory(df_all):
         rate=5, price=px("BPD7D"),
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
+    # =========================
+    # BA7DD
+    # =========================
+    ba7dd = bond_calculator_pro(
+        name="BA7DD", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
+        payment_frequency=6,
+        amortization_dates=[
+            "2028-09-01","2029-03-01","2029-09-01",   # 0.75%
+            "2030-03-01","2030-09-01",                 # 6.15%
+            "2031-03-01","2031-09-01","2032-03-01","2032-09-01","2033-03-01","2033-09-01", # 6.35%
+            "2034-03-01","2034-09-01","2035-03-01","2035-09-01","2036-03-01","2036-09-01", # 5.90%
+            "2037-03-01",  # 5.98%
+            "2037-09-01"   # 5.97%
+        ],
+        amortizations=[
+            0.75,0.75,0.75,
+            6.15,6.15,
+            6.35,6.35,6.35,6.35,6.35,6.35,
+            5.90,5.90,5.90,5.90,5.90,5.90,
+            5.98,
+            5.97
+        ],
+        rate=2.0,   # arranca 2% anual
+        price=px("BA7DD"),  # función tuya px() para buscar precio
+        step_up_dates=["2021-09-01","2022-09-01","2023-09-01","2024-09-01"],
+        step_up=[
+            0.03,   # 3% desde 2021-09-01
+            0.04,   # 4% desde 2022-09-01
+            0.05,   # 5% desde 2023-09-01
+            0.0525  # 5.25% desde 2024-09-01 hasta vencimiento
+        ],
+        outstanding=10000, calificacion="CCC-"
+    )
+    
+    # =========================
+    # BB7DD
+    # =========================
+    bb7dd = bond_calculator_pro(
+        name="BB7DD", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
+        payment_frequency=6,
+        amortization_dates=[
+            "2024-03-01","2024-09-01",
+            "2025-03-01","2025-09-01",
+            "2026-03-01","2026-09-01",
+            "2027-03-01","2027-09-01",
+            "2028-03-01","2028-09-01",
+            "2029-03-01","2029-09-01",
+            "2030-03-01","2030-09-01",
+            "2031-03-01","2031-09-01",
+            "2032-03-01","2032-09-01",
+            "2033-03-01","2033-09-01",
+            "2034-03-01","2034-09-01",
+            "2035-03-01","2035-09-01",
+            "2036-03-01","2036-09-01",
+            "2037-03-01","2037-09-01"
+        ],
+        amortizations=[  # ejemplo: iguales de 3.57% (28 cuotas)
+            100/28.0
+        ]*28,
+        rate=2.5,   # arranca 2.5% anual
+        price=px("BB7DD"),
+        step_up_dates=["2021-09-01","2022-09-01","2023-09-01","2024-09-01"],
+        step_up=[
+            0.039,   # 3.9% desde 2021-09-01
+            0.0525,  # 5.25% desde 2022-09-01
+            0.06375, # 6.375% desde 2023-09-01
+            0.06625  # 6.625% desde 2024-09-01 hasta vencimiento
+        ],
+        outstanding=15000, calificacion="CCC-"
+    )
+    
+    # =========================
+    # BC7DD
+    # =========================
+    bc7dd = bond_calculator_pro(
+        name="BC7DD", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
+        payment_frequency=6,
+        amortization_dates=[
+            "2024-03-01","2024-09-01","2025-03-01","2025-09-01",
+            "2026-03-01","2026-09-01","2027-03-01","2027-09-01",
+            "2028-03-01","2028-09-01","2029-03-01","2029-09-01",
+            "2030-03-01","2030-09-01","2031-03-01","2031-09-01",
+            "2032-03-01","2032-09-01","2033-03-01","2033-09-01",
+            "2034-03-01","2034-09-01","2035-03-01","2035-09-01",
+            "2036-03-01","2036-09-01","2037-03-01","2037-09-01"
+        ],
+        amortizations=[100/28.0]*28,  # igual que AL41
+        rate=2.5,
+        price=px("BC7DD"),
+        step_up_dates=["2021-09-01","2022-09-01","2023-09-01","2024-09-01"],
+        step_up=[
+            0.035,   # 3.5% desde 2021-09-01
+            0.045,   # 4.5% desde 2022-09-01
+            0.055,   # 5.5% desde 2023-09-01
+            0.05875  # 5.875% desde 2024-09-01 hasta vencimiento
+        ],
+        outstanding=12000, calificacion="CCC-"
+    )
 
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
-            bpb7d, bpc7d, bpd7d]
+            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd]
 
 # =========================
 # Simulador de flujos
