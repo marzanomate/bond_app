@@ -842,7 +842,7 @@ def manual_bonds_factory(df_all):
     # BA7DD
     # =========================
     ba7dd = bond_calculator_pro(
-        name="BA7DD", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        name="BA7DD", emisor="Provincia Buenos Aires", curr="USD", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
@@ -877,7 +877,7 @@ def manual_bonds_factory(df_all):
     # BB7DD
     # =========================
     bb7dd = bond_calculator_pro(
-        name="BB7DD", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        name="BB7DD", emisor="Provincia Buenos Aires", curr="USD", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
@@ -915,7 +915,7 @@ def manual_bonds_factory(df_all):
     # BC7DD
     # =========================
     bc7dd = bond_calculator_pro(
-        name="BC7DD", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        name="BC7DD", emisor="Provincia Buenos Aires", curr="USD", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
