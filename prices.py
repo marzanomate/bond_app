@@ -542,7 +542,7 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
 def load_bcp_from_excel(
     df_all: pd.DataFrame,
     adj: float = 1.0,
-    price_col_prefer: str = "px_bid"
+    price_col_prefer: str = "px_ask"
 ) -> list:
     url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
     content = requests.get(url_excel_raw, timeout=25).content
