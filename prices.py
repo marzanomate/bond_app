@@ -542,18 +542,30 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
 def load_bcp_from_excel(
     df_all: pd.DataFrame,
     adj: float = 1.0,
-    price_col_prefer: str = "px_ask"
+    price_col_prefer: str = "px_bid"
 ) -> list:
     url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
-    content = requests.get(url_excel_raw, timeout=25).content
+    r = requests.get(url_excel_raw, timeout=25)
+    r.raise_for_status()
+    content = r.content
+
+    # sanity-check: archivos .xlsx son ZIP y empiezan con 'PK'
+    if not content.startswith(b"PK"):
+        raise RuntimeError(
+            "El contenido descargado no parece un .xlsx (posible rate-limit de GitHub o URL incorrecta)."
+        )
+
+    # 🔧 fuerza el engine a openpyxl
     raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
 
-    required = ["name","empresa","curr","law","start_date","end_date",
-                "payment_frequency","amortization_dates","amortizations",
-                "rate","outstanding","calificación"]
+    required = [
+        "name","empresa","curr","law","start_date","end_date",
+        "payment_frequency","amortization_dates","amortizations",
+        "rate","outstanding","calificación"
+    ]
     missing = [c for c in required if c not in raw.columns]
     if missing:
-        raise ValueError(f"Faltan columnas en el Excel: {missing}")
+        raise ValueError(f"Missing columns in Excel: {missing}")
 
     out = []
     for _, r in raw.iterrows():
