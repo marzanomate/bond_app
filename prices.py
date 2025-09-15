@@ -546,7 +546,7 @@ def load_bcp_from_excel(
 ) -> list:
     url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
     content = requests.get(url_excel_raw, timeout=25).content
-    raw = pd.read_excel(io.BytesIO(content), dtype=str)
+    raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
 
     required = ["name","empresa","curr","law","start_date","end_date",
                 "payment_frequency","amortization_dates","amortizations",
