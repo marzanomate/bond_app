@@ -1041,7 +1041,7 @@ def main():
 
     if page == "Bonos HD":
         st.title("Bonos HD")
-        st.caption("Tabla de métricas, simulador de flujos y comparador de métricas (3 bonos).")
+        st.caption("Explorar métricas de Bonos HD")
 
         # =========================
         # 1) TABLA DE MÉTRICAS + FILTROS
