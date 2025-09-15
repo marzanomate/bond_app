@@ -538,7 +538,7 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
 # Carga de ONs desde Excel
 # =========================
 
-@st.cache_data(ttl=600)
+@st.cache_resource(show_spinner=False)
 def load_bcp_from_excel(
     df_all: pd.DataFrame,
     adj: float = 1.0,
@@ -678,6 +678,7 @@ def center_table(df: pd.DataFrame) -> str:
 # Manual: lista de soberanos
 # =========================
 
+@st.cache_resource(show_spinner=False)
 def manual_bonds_factory(df_all):
     def px(sym): 
         try: return get_price_for_symbol(df_all, sym, prefer="px_bid")
