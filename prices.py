@@ -1809,15 +1809,15 @@ def main():
                                 "TNA 30": b.tna30(),
                                 "Duration": b.duration(),
                                 "Modified Duration": b.modified_duration(),
-                                "Direct Return": b.direct_return(),
+                                "Retorno Directo": b.direct_return(),
                             }])
                         finally:
                             b.price = old
     
-                        for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Direct Return"]:
+                        for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
                             df_one[c] = pd.to_numeric(df_one[c], errors="coerce")
                         df_one["Precio"] = df_one["Precio"].round(2)
-                        for c in ["TIR","TNA 30","Duration","Modified Duration","Direct Return"]:
+                        for c in ["TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
                             df_one[c] = df_one[c].round(2)
                         st.dataframe(df_one, use_container_width=True, hide_index=True)
     
@@ -1875,10 +1875,10 @@ def main():
                         "Vencimiento": True,
                         "Precio": ":.2f",
                         "TIR": ":.2f",
-                        "TEM (implícita)": ":.2f",
+                        "TEM": ":.2f",
                         "Duration": ":.2f",
                         "Modified Duration": ":.2f",
-                        "Direct Return": ":.2f",
+                        "Retorno Directo": ":.2f",
                         "TNA 30": ":.2f",
                     },
                     size_max=12,
@@ -1896,8 +1896,8 @@ def main():
                 st.markdown("**Tabla de la curva mostrada:**")
                 cols_show = [
                     "Ticker","Tipo","Vencimiento","Precio",
-                    "Rendimiento (TIR EA)","TNA 30","TEM (implícita)",
-                    "Duration","Modified Duration","Direct Return"
+                    "Rendimiento (TIR EA)","TNA 30","TEM",
+                    "Duration","Modified Duration","Retorno Directo"
                 ]
                 cols_show = [c for c in cols_show if c in df_curve.columns]
                 st.dataframe(
@@ -1905,10 +1905,10 @@ def main():
                         "Precio": "{:.2f}",
                         "Rendimiento (TIR EA)": "{:.2f}",
                         "TNA 30": "{:.2f}",
-                        "TEM (implícita)": "{:.2f}",
+                        "TEM": "{:.2f}",
                         "Duration": "{:.2f}",
                         "Modified Duration": "{:.2f}",
-                        "Direct Return": "{:.2f}",
+                        "Retorno Directo": "{:.2f}",
                     }),
                     use_container_width=True,
                     hide_index=True
