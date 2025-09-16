@@ -1763,7 +1763,7 @@ def main():
             )
         else:
             st.info("No hay bonos para los emisores seleccionados.")
-            
+
     elif page == "Lecaps":
         st.title("LECAPs / BONCAPs / TAMAR")
     
@@ -1834,14 +1834,13 @@ def main():
                         st.error("No se pudo calcular el precio con esa TIR.")
                     else:
                         st.success(f"Precio clean: **{p:.2f}**")
-    
                         # Chequeo TIR con ese precio
                         tir_check = b2.yield_from_price(p)
                         st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
     
         # ---------- Curva excluyendo TTM, TTJ, TTS, TTD ----------
         st.divider()
-        st.subheader("BONCAPs/LECAPs")
+        st.subheader("Curva (sin TTM, TTJ, TTS, TTD)")
     
         if df_lecaps.empty:
             st.info("No hay datos de LECAPs/BONCAPs para graficar.")
@@ -1866,7 +1865,7 @@ def main():
                     y="TIR",
                     color="Tipo",
                     hover_name="Ticker",
-                    text="Ticker",                   # ← etiquetas
+                    text="Ticker",                   # etiquetas
                     hover_data={
                         "Ticker": False,
                         "Tipo": True,
@@ -1883,8 +1882,8 @@ def main():
                 )
                 fig.update_traces(
                     marker=dict(size=12, line=dict(width=1)),
-                    textposition="top center",      # ← posición de etiqueta
-                    textfont=dict(size=10)          # ← tamaño de etiqueta
+                    textposition="top center",
+                    textfont=dict(size=10)
                 )
     
                 # --- Ajuste logarítmico global: TIR = a + b * ln(MD) ---
@@ -1895,8 +1894,8 @@ def main():
                 y = df_fit["TIR"].to_numpy(dtype=float)
                 Xlog = np.log(x)
     
-                # Coeficientes (b es pendiente sobre ln(MD), a es intercepto)
-                bcoef, acoef = np.polyfit(Xlog, y, 1)
+                # Coeficientes
+                bcoef, acoef = np.polyfit(Xlog, y, 1)  # y = acoef + bcoef*ln(x)
     
                 # Curva lisa para dibujar
                 x_line = np.linspace(x.min(), x.max(), 200)
@@ -1931,30 +1930,123 @@ def main():
                         )
                     ],
                 )
-    
                 st.plotly_chart(fig, use_container_width=True)
+                # 👇 Se eliminó la tabla que estaba debajo del gráfico
     
-                st.markdown("**Tabla de la curva mostrada:**")
-                cols_show = [
-                    "Ticker","Tipo","Vencimiento","Precio",
-                    "Rendimiento (TIR EA)","TNA 30","TEM",
-                    "Duration","Modified Duration","Retorno Directo"
-                ]
-                cols_show = [c for c in cols_show if c in df_curve.columns]
-                st.dataframe(
-                    df_curve[cols_show].style.format({
-                        "Precio": "{:.2f}",
-                        "Rendimiento (TIR EA)": "{:.2f}",
-                        "TNA 30": "{:.2f}",
-                        "TEM": "{:.2f}",
-                        "Duration": "{:.2f}",
-                        "Modified Duration": "{:.2f}",
-                        "Retorno Directo": "{:.2f}",
-                    }),
-                    use_container_width=True,
-                    hide_index=True
+        # ---------- TC implícito MEP->LECAP/BONCAP + Bandas ----------
+        st.divider()
+        st.subheader("TC implícito al vencimiento (MEP→LECAP/BONCAP) con bandas")
+    
+        # Intento obtener un valor por defecto de MEP; si no, que el usuario lo ingrese
+        def guess_mep_rate(df_mep):
+            # Intentos suaves para columnas típicas
+            for col in ["mep", "MEP", "px", "seller", "venta", "px_ask", "px_bid", "price"]:
+                if col in df_mep.columns:
+                    s = pd.to_numeric(df_mep[col], errors="coerce").dropna()
+                    if not s.empty and s.mean() > 100:  # un TC razonable
+                        return float(round(s.mean(), 2))
+            return 1000.0  # fallback conservador
+    
+        default_mep = guess_mep_rate(df_mep) if isinstance(df_mep, pd.DataFrame) and not df_mep.empty else 1000.0
+        mep_rate = st.number_input("MEP actual (ARS por USD)", min_value=0.0, step=1.0, value=float(default_mep), key="mep_rate_input")
+    
+        # Selección de tickers a mostrar
+        tickers_fx = sorted(le_map.keys()) if le_map else []
+        sel_fx = st.multiselect("Elegí LECAPs/BONCAPs para el gráfico de TC implícito", tickers_fx, default=tickers_fx)
+    
+        if not le_map or not sel_fx:
+            st.info("Seleccioná al menos una LECAP/BONCAP.")
+        else:
+            # Pago final por 100 VN en LECAP/BONCAP
+            def final_payment(obj: lecaps) -> float:
+                # replica lógica: 100 * (1+TEM)^(meses_30/360)
+                capital = 100.0
+                months = obj._months_30_360()
+                return capital * ((1.0 + obj.tem) ** months)
+    
+            # Bandas: parten 2025-04-07 en 1400/1000 y crecen 1% mensual prorrateado por días hábiles (Merval).
+            base_date = datetime(2025, 4, 7)
+            cal = ql.Argentina(ql.Argentina.Merval)
+            per_bd_factor = 1.01 ** (1.0 / 21.0)  # 1% por ~21 hábiles/mes
+    
+            rows_fx = []
+            for tkr in sel_fx:
+                obj = le_map.get(tkr)
+                if obj is None:
+                    continue
+                price = float(obj.price) if np.isfinite(obj.price) else np.nan
+                if not np.isfinite(price) or price <= 0:
+                    continue
+    
+                # TC implícito: (MEP * pago_final) / precio
+                pf = final_payment(obj)
+                tc_impl = mep_rate * (pf / price)
+    
+                # bdays desde 2025-04-07 hasta el vencimiento
+                dt_mty = obj.end_date
+                qd0 = ql.Date(base_date.day, base_date.month, base_date.year)
+                qd1 = ql.Date(dt_mty.day, dt_mty.month, dt_mty.year)
+                bdays = cal.businessDaysBetween(qd0, qd1, False, False)  # sin contar extremos
+    
+                band_upper = 1400.0 * (per_bd_factor ** bdays)
+                band_lower = 1000.0 * (per_bd_factor ** bdays)
+    
+                rows_fx.append({
+                    "Ticker": tkr,
+                    "Vencimiento": dt_mty.date(),
+                    "Precio": price,
+                    "Pago final por 100": pf,
+                    "TC implícito": tc_impl,
+                    "Banda sup": band_upper,
+                    "Banda inf": band_lower,
+                })
+    
+            df_fx = pd.DataFrame(rows_fx)
+            if df_fx.empty:
+                st.info("No hay datos suficientes para calcular el TC implícito.")
+            else:
+                # Gráfico: puntos por Ticker (TC implícito) + líneas de bandas vs. Vencimiento
+                df_fx = df_fx.sort_values("Vencimiento")
+    
+                # Serie de fechas y bandas
+                x_dates = pd.to_datetime(df_fx["Vencimiento"]).to_list()
+                y_sup = df_fx["Banda sup"].to_list()
+                y_inf = df_fx["Banda inf"].to_list()
+    
+                fig_fx = go.Figure()
+                # Bandas
+                fig_fx.add_trace(go.Scatter(
+                    x=x_dates, y=y_sup, mode="lines", name="Banda superior (1%/mes háb.)"
+                ))
+                fig_fx.add_trace(go.Scatter(
+                    x=x_dates, y=y_inf, mode="lines", name="Banda inferior (1%/mes háb.)"
+                ))
+                # Puntos TC implícito
+                fig_fx.add_trace(go.Scatter(
+                    x=x_dates,
+                    y=df_fx["TC implícito"],
+                    mode="markers+text",
+                    name="TC implícito (MEP→LECAP/BONCAP)",
+                    text=df_fx["Ticker"],
+                    textposition="top center",
+                    hovertext=[
+                        f"{r['Ticker']} | Vto: {r['Vencimiento']}<br>"
+                        f"Precio: {r['Precio']:.2f} | Pago100: {r['Pago final por 100']:.2f}<br>"
+                        f"TC implícito: {r['TC implícito']:.2f}"
+                        for _, r in df_fx.iterrows()
+                    ],
+                    hoverinfo="text",
+                    marker=dict(size=12, line=dict(width=1))
+                ))
+                fig_fx.update_layout(
+                    xaxis_title="Fecha de vencimiento",
+                    yaxis_title="ARS por USD",
+                    legend_title="Series",
+                    height=480,
+                    margin=dict(l=10, r=10, t=10, b=10),
                 )
-
+                st.plotly_chart(fig_fx, use_container_width=True)
+ 
     else:
         st.title("Otros")
         st.info("Sección en construcción para otros instrumentos y herramientas.")
