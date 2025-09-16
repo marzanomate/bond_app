@@ -535,7 +535,7 @@ class lecaps:
         return round(dur / (1.0 + irr), 2)
 
     # ======================
-    # NUEVO 1: Direct return
+    # NUEVO 1: Retorno Directo
     # ======================
     def direct_return(self):
         """
@@ -823,18 +823,18 @@ def build_lecaps_metrics(rows, df_all, today=None):
                 "Ticker": r.get("Ticker"),
                 "Tipo": r.get("Tipo"),
                 "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y") if pd.notna(r.get("Vencimiento")) else "",
-                "Precio (ASK)": np.nan,
+                "Precio": np.nan,
                 "Rendimiento (TIR EA)": np.nan,
-                "Direct Return": np.nan,
+                "Retorno Directo": np.nan,
                 "TNA 30": np.nan,
-                "TEM (implícita)": np.nan,
+                "TEM": np.nan,
                 "Duration": np.nan,
                 "Modified Duration": np.nan,
             })
 
     cols = [
-        "Ticker","Tipo","Vencimiento","Precio (ASK)",
-        "Rendimiento (TIR EA)","Direct Return","TNA 30","TEM (implícita)",
+        "Ticker","Tipo","Vencimiento","Precio",
+        "Rendimiento (TIR EA)","Retorno Directo","TNA 30","TEM",
         "Duration","Modified Duration"
     ]
     return pd.DataFrame(out)[cols]
@@ -846,7 +846,7 @@ def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
     """
     df = build_lecaps_metrics(spec_rows, df_all)
     # Asegurar redondeo uniforme a 2 decimales en numéricos:
-    for c in ["Precio (ASK)","Rendimiento (TIR EA)","Direct Return","TNA 30","TEM (implícita)","Duration","Modified Duration"]:
+    for c in ["Precio","Rendimiento (TIR EA)","","TNA 30","TEM","Duration","Modified Duration"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
     return df
