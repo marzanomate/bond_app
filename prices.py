@@ -772,7 +772,7 @@ def build_lecaps_metrics(rows, df_all, today=None):
         if "px_bid" in px_df.columns:
             precio = precio.fillna(px_df["px_bid"])
         # >>> ajuste ask*1.005 (o bid si fue fallback)
-        precio = precio * 1.002
+        precio = precio * 1.0
         px_df = pd.DataFrame({"Ticker": px_df["symbol"], "Precio": precio})
         df_spec = df_spec.merge(px_df, on="Ticker", how="left")
     else:
