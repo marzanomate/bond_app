@@ -1841,20 +1841,22 @@ def main():
         # ---------- Curva excluyendo TTM, TTJ, TTS, TTD ----------
         st.divider()
         st.subheader("Curva Tasa Fija")
-    
+
         if df_lecaps.empty:
             st.info("No hay datos de LECAPs/BONCAPs para graficar.")
         else:
             excl = {"TTM26", "TTJ26", "TTS26", "TTD26"}
             df_curve = df_lecaps.copy()
             df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
-    
-            # Asegurar numéricos y renombrar TIR para el gráfico
-            for c in ["TNA 30", "Modified Duration"]:
+
+            # Asegurar numéricos
+            for c in ["TNA 30", "Modified Duration", "Precio (ASK)", "Duration", "Retorno Directo", "Rendimiento (TIR EA)", "TEM (implícita)"]:
                 if c in df_curve.columns:
                     df_curve[c] = pd.to_numeric(df_curve[c], errors="coerce")
-            df_plot = df_curve.rename(columns={"TNA 30": "TIR"})
-    
+
+            # Vamos a graficar directamente TNA 30 (eje Y) vs Modified Duration (eje X)
+            df_plot = df_curve.dropna(subset=["TNA 30", "Modified Duration"]).copy()
+
             if df_plot["Modified Duration"].gt(0).sum() == 0:
                 st.info("No hay Modified Duration > 0 para ajustar una curva logarítmica.")
             else:
@@ -1863,19 +1865,19 @@ def main():
                     df_plot,
                     x="Modified Duration",
                     y="TNA 30",
-                    color="Tipo",
+                    color="Tipo" if "Tipo" in df_plot.columns else None,
                     hover_name="Ticker",
-                    text="Ticker",                   # etiquetas
+                    text="Ticker",
                     hover_data={
                         "Ticker": False,
-                        "Tipo": True,
-                        "Vencimiento": True,
-                        "Precio": ":.2f",
-                        "TIR": ":.2f",
-                        "TEM": ":.2f",
-                        "Duration": ":.2f",
+                        "Tipo": True if "Tipo" in df_plot.columns else False,
+                        "Vencimiento": True if "Vencimiento" in df_plot.columns else False,
+                        "Precio (ASK)": ":.2f" if "Precio (ASK)" in df_plot.columns else False,
+                        "Rendimiento (TIR EA)": ":.2f" if "Rendimiento (TIR EA)" in df_plot.columns else False,
+                        "TEM (implícita)": ":.2f" if "TEM (implícita)" in df_plot.columns else False,
+                        "Duration": ":.2f" if "Duration" in df_plot.columns else False,
                         "Modified Duration": ":.2f",
-                        "Retorno Directo": ":.2f",
+                        "Retorno Directo": ":.2f" if "Retorno Directo" in df_plot.columns else False,
                         "TNA 30": ":.2f",
                     },
                     size_max=12,
@@ -1885,40 +1887,41 @@ def main():
                     textposition="top center",
                     textfont=dict(size=10)
                 )
-    
-                # --- Ajuste logarítmico global: TIR = a + b * ln(MD) ---
+
+                # --- Ajuste logarítmico global: TNA30 = a + b * ln(MD) ---
                 df_fit = df_plot[["Modified Duration", "TNA 30"]].dropna()
                 df_fit = df_fit[df_fit["Modified Duration"] > 0]   # ln(x) requiere x>0
-    
+
                 x = df_fit["Modified Duration"].to_numpy(dtype=float)
                 y = df_fit["TNA 30"].to_numpy(dtype=float)
                 Xlog = np.log(x)
-    
-                # Coeficientes
-                bcoef, acoef = np.polyfit(Xlog, y, 1)  # y = acoef + bcoef*ln(x)
-    
+
+                # Coeficientes (y = a + b*ln(x))
+                bcoef, acoef = np.polyfit(Xlog, y, 1)
+
                 # Curva lisa para dibujar
                 x_line = np.linspace(x.min(), x.max(), 200)
                 y_line = acoef + bcoef * np.log(x_line)
-    
+
                 fig.add_trace(
                     go.Scatter(
                         x=x_line,
                         y=y_line,
-                        mode="lines"
+                        mode="lines",
+                        name="Ajuste log: TNA30 = a + b·ln(MD)"
                     )
                 )
-    
+
                 # R^2 para referencia
                 y_hat = acoef + bcoef * Xlog
                 ss_res = float(np.sum((y - y_hat) ** 2))
                 ss_tot = float(np.sum((y - y.mean()) ** 2))
                 r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-    
+
                 fig.update_layout(
-                    xaxis_title="Modified Duration",
-                    yaxis_title="TNA 30",
-                    legend_title="Tipo",
+                    xaxis_title="Modified Duration (años)",
+                    yaxis_title="TNA 30 (%)",
+                    legend_title="Tipo" if "Tipo" in df_plot.columns else None,
                     height=480,
                     margin=dict(l=10, r=10, t=10, b=10),
                     annotations=[
@@ -1930,7 +1933,6 @@ def main():
                     ],
                 )
                 st.plotly_chart(fig, use_container_width=True)
-                # 👇 Se eliminó la tabla que estaba debajo del gráfico
     
         # ---------- TC implícito MEP->LECAP/BONCAP + Bandas ----------
         st.divider()
