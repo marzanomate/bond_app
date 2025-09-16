@@ -1871,12 +1871,12 @@ def main():
                         "Ticker": False,
                         "Tipo": True,
                         "Vencimiento": True,
-                        "Precio (ASK)": ":.2f",
+                        "Precio": ":.2f",
                         "TIR": ":.2f",
-                        "TEM (implícita)": ":.2f",
+                        "TEM": ":.2f",
                         "Duration": ":.2f",
                         "Modified Duration": ":.2f",
-                        "Direct Return": ":.2f",
+                        "Rendimiento Directo": ":.2f",
                         "TNA 30": ":.2f",
                     },
                     size_max=12,
@@ -1936,20 +1936,20 @@ def main():
     
                 st.markdown("**Tabla de la curva mostrada:**")
                 cols_show = [
-                    "Ticker","Tipo","Vencimiento","Precio (ASK)",
-                    "Rendimiento (TIR EA)","TNA 30","TEM (implícita)",
-                    "Duration","Modified Duration","Direct Return"
+                    "Ticker","Tipo","Vencimiento","Precio",
+                    "Rendimiento (TIR EA)","TNA 30","TEM",
+                    "Duration","Modified Duration","Rendimiento Directo"
                 ]
                 cols_show = [c for c in cols_show if c in df_curve.columns]
                 st.dataframe(
                     df_curve[cols_show].style.format({
-                        "Precio (ASK)": "{:.2f}",
+                        "Precio": "{:.2f}",
                         "Rendimiento (TIR EA)": "{:.2f}",
                         "TNA 30": "{:.2f}",
-                        "TEM (implícita)": "{:.2f}",
+                        "TEM": "{:.2f}",
                         "Duration": "{:.2f}",
                         "Modified Duration": "{:.2f}",
-                        "Direct Return": "{:.2f}",
+                        "Rendimiento Directo": "{:.2f}",
                     }),
                     use_container_width=True,
                     hide_index=True
