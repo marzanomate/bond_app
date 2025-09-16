@@ -1365,7 +1365,6 @@ rows = [
     ("TTD26","15/12/2026","29/01/2025", 2.14, "Fija"),
 ]
 
-df_lecaps = build_lecaps_table(rows, df_all)
 
 # =========================
 # Simulador de flujos
