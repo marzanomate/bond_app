@@ -1873,7 +1873,7 @@ def main():
                         "Ticker": False,
                         "Tipo": True,
                         "Vencimiento": True,
-                        "Precio (ASK)": ":.2f",
+                        "Precio": ":.2f",
                         "TIR": ":.2f",
                         "TEM (implícita)": ":.2f",
                         "Duration": ":.2f",
@@ -1895,14 +1895,14 @@ def main():
     
                 st.markdown("**Tabla de la curva mostrada:**")
                 cols_show = [
-                    "Ticker","Tipo","Vencimiento","Precio (ASK)",
+                    "Ticker","Tipo","Vencimiento","Precio",
                     "Rendimiento (TIR EA)","TNA 30","TEM (implícita)",
                     "Duration","Modified Duration","Direct Return"
                 ]
                 cols_show = [c for c in cols_show if c in df_curve.columns]
                 st.dataframe(
                     df_curve[cols_show].style.format({
-                        "Precio (ASK)": "{:.2f}",
+                        "Precio": "{:.2f}",
                         "Rendimiento (TIR EA)": "{:.2f}",
                         "TNA 30": "{:.2f}",
                         "TEM (implícita)": "{:.2f}",
