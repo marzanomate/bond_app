@@ -699,21 +699,16 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
 # --- Normalizador mínimo para df_all (NO cambia tus funciones de búsqueda) ---
 def normalize_market_df(df_all: pd.DataFrame) -> pd.DataFrame:
     df = df_all.copy()
-
-    # Renombres frecuentes de data912 -> estándar interno
-    rename_map = {}
-    if "ticker" in df.columns: rename_map["ticker"] = "symbol"
-    if "ask" in df.columns:    rename_map["ask"] = "px_ask"
-    if "bid" in df.columns:    rename_map["bid"] = "px_bid"
-    df = df.rename(columns=rename_map)
-
-    # Formato esperado por el builder
+    ren = {}
+    if "ticker" in df.columns: ren["ticker"] = "symbol"
+    if "ask" in df.columns:    ren["ask"]    = "px_ask"
+    if "bid" in df.columns:    ren["bid"]    = "px_bid"
+    df = df.rename(columns=ren)
     if "symbol" in df.columns:
         df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
-    for c in ("px_ask", "px_bid"):
+    for c in ("px_ask","px_bid"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-
     return df
 
 def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
@@ -750,25 +745,38 @@ def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
 
     return val if pd.notna(val) else np.nan
 
-def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFrame:
-    """
-    rows: [(Ticker, Vencimiento(dd/mm/yyyy), Emision(dd/mm/yyyy), TEM(% mensual), Tipo), ...]
-    Devuelve un DF con:
-      Ticker, Tipo, Vencimiento, Precio (ASK), Rendimiento (TIR EA), Direct Return,
-      TNA 30, TEM (implícita), Duration, Modified Duration
-    """
-    df_spec = pd.DataFrame(rows, columns=["Ticker","Vencimiento","Emision","TEM_ref","Tipo"])
-    # parse fechas (día/mes/año)
+def build_lecaps_metrics(rows, df_all, today=None):
+    import pandas as pd, numpy as np
+
+    # --- spec ---
+    df_spec = pd.DataFrame(rows, columns=["Ticker","Vencimiento","Emision","TEM_str","Tipo"])
+    df_spec["Ticker"] = df_spec["Ticker"].astype(str).str.strip().str.upper()
     df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
     df_spec["Emision"]     = pd.to_datetime(df_spec["Emision"],     dayfirst=True, errors="coerce")
 
-    # TEM contractual a decimal mensual
-    df_spec["TEM_dec"] = pd.to_numeric(df_spec["TEM_ref"], errors="coerce") / 100.0
+    # TEM (mensual) a decimal
+    def to_tem_dec(x):
+        if pd.isna(x): return np.nan
+        if isinstance(x, str):
+            try: x = float(x.replace("%","").replace(",","."))
+            except Exception: return np.nan
+        return float(x)/100.0
+    df_spec["TEM_dec"] = df_spec["TEM_str"].apply(to_tem_dec)
 
-    # Traer precio ASK (fallback a BID)
-    df_spec["Precio"] = df_spec["Ticker"].apply(lambda t: _get_ask_price(df_all, t))
+    # --- traer precio ask / bid ---
+    mkt = normalize_market_df(df_all)  # <- usa el normalizador de arriba
+    if "symbol" in mkt.columns:
+        px_df = mkt[["symbol"] + [c for c in ("px_ask","px_bid") if c in mkt.columns]].copy()
+        precio = px_df.get("px_ask", pd.Series(np.nan, index=px_df.index))
+        if "px_bid" in px_df.columns:
+            precio = precio.fillna(px_df["px_bid"])
+        px_df = pd.DataFrame({"Ticker": px_df["symbol"], "Precio": precio})
+        df_spec = df_spec.merge(px_df, on="Ticker", how="left")
+    else:
+        df_spec["Precio"] = np.nan
 
-    out_rows = []
+    # --- métricas con tu clase 'lecaps' ---
+    out = []
     for _, r in df_spec.iterrows():
         try:
             if any(pd.isna(r[k]) for k in ["Vencimiento","Emision","TEM_dec","Precio"]):
@@ -778,33 +786,37 @@ def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFram
                 name=r["Ticker"],
                 start_date=r["Emision"].to_pydatetime(),
                 end_date=r["Vencimiento"].to_pydatetime(),
-                tem=float(r["TEM_dec"]),   # TEM contractual mensual (decimal)
-                price=float(r["Precio"])   # precio ask
+                tem=float(r["TEM_dec"]),   # mensual (decimal)
+                price=float(r["Precio"])   # precio clean
             )
 
-            # métricas
-            tir_pct = obj.xirr()                     # % EA (tu método ya devuelve en %)
-            irr_dec = tir_pct / 100.0
-            dur     = obj.duration()                 # años
-            md      = obj.modified_duration()
-            tna30   = obj.tna30()                    # % (30/365 * 12)
-            tem_imp = obj.tem_from_irr()             # % mensual implícita
-            direct  = ((1.0 + irr_dec) ** dur - 1.0) * 100.0  # %
+            # helpers seguros
+            def safe(fn):
+                try: return fn()
+                except Exception: return np.nan
 
-            out_rows.append({
+            tirea = safe(obj.xirr)              # % EA
+            dur   = safe(obj.duration)          # años
+            md    = safe(obj.modified_duration)
+            tna30 = safe(obj.tna30)             # %
+            tem_i = safe(obj.tem_from_irr)      # % mensual
+
+            direct = ((1 + (tirea or 0)/100.0)**(dur or 0) - 1.0)*100.0 if pd.notna(tirea) and pd.notna(dur) else np.nan
+
+            out.append({
                 "Ticker": r["Ticker"],
                 "Tipo": r["Tipo"],
                 "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y"),
                 "Precio (ASK)": round(float(r["Precio"]), 2),
-                "Rendimiento (TIR EA)": round(tir_pct, 2),
-                "Direct Return": round(direct, 2),
-                "TNA 30": round(tna30, 2),
-                "TEM (implícita)": round(tem_imp, 2),
-                "Duration": round(dur, 2),
-                "Modified Duration": round(md, 2),
+                "Rendimiento (TIR EA)": round(tirea, 2) if pd.notna(tirea) else np.nan,
+                "Direct Return": round(direct, 2) if pd.notna(direct) else np.nan,
+                "TNA 30": round(tna30, 2) if pd.notna(tna30) else np.nan,
+                "TEM (implícita)": round(tem_i, 2) if pd.notna(tem_i) else np.nan,
+                "Duration": round(dur, 2) if pd.notna(dur) else np.nan,
+                "Modified Duration": round(md, 2) if pd.notna(md) else np.nan,
             })
         except Exception:
-            out_rows.append({
+            out.append({
                 "Ticker": r.get("Ticker"),
                 "Tipo": r.get("Tipo"),
                 "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y") if pd.notna(r.get("Vencimiento")) else "",
@@ -817,13 +829,12 @@ def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFram
                 "Modified Duration": np.nan,
             })
 
-    cols_order = [
+    cols = [
         "Ticker","Tipo","Vencimiento","Precio (ASK)",
         "Rendimiento (TIR EA)","Direct Return","TNA 30","TEM (implícita)",
         "Duration","Modified Duration"
     ]
-    return pd.DataFrame(out_rows)[cols_order]
-
+    return pd.DataFrame(out)[cols]
 
 def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
     """
@@ -1343,7 +1354,7 @@ LECAPS_SPEC = [
     ("S16E6","16/01/2026","18/08/2025",3.6,  "Fija"),
     ("T30E6","30/1/2026","16/12/2024", 2.65, "Fija"),
     ("T13F6","13/2/2026","29/11/2024", 2.60, "Fija"),
-    ("S27F6","29/2/2026","29/8/2025",  3.95, "Fija"),
+    ("S27F6","27/2/2026","29/8/2025",  3.95, "Fija"),
     ("S29Y6","29/5/2026","30/5/2025",  2.35, "Fija"),
     ("T30J6","30/6/2026","17/1/2025",  2.15, "Fija"),
     ("T15E7","15/1/2027","31/1/2025",  2.05, "Fija"),
@@ -1657,13 +1668,14 @@ def main():
             
     elif page == "Lecaps":
         st.title("LECAPs / BONCAPs / TAMAR")
-    
-        # construye tabla con precios ask desde df_all
-        df_lecaps = build_lecaps_table(LECAPS_SPEC, df_all_norm)
+
+        # df_all viene de load_market_data()
+        df_all_norm = normalize_market_df(df_all)
+        df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
     
         st.dataframe(
             df_lecaps,
-            width="stretch",   # reemplazo de use_container_width=True
+            width="stretch",
             hide_index=True
         )
 
