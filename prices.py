@@ -1967,7 +1967,7 @@ def main():
             # Bandas: parten 2025-04-07 en 1400/1000 y crecen 1% mensual prorrateado por días hábiles (Merval).
             base_date = datetime(2025, 4, 7)
             cal = ql.Argentina(ql.Argentina.Merval)
-            per_bd_factor = 1.01 ** (1.0 / 21.0)  # 1% por ~21 hábiles/mes
+            per_bd_factor = 0.01 ** (1.0 / 21.0)  # 1% por ~21 hábiles/mes
     
             rows_fx = []
             for tkr in sel_fx:
@@ -1988,8 +1988,8 @@ def main():
                 qd1 = ql.Date(dt_mty.day, dt_mty.month, dt_mty.year)
                 bdays = cal.businessDaysBetween(qd0, qd1, False, False)  # sin contar extremos
     
-                band_upper = 1400.0 * (per_bd_factor ** bdays)
-                band_lower = 1000.0 * (per_bd_factor ** bdays)
+                band_upper = 1400.0 * (1 + per_bd_factor ** bdays)
+                band_lower = 1000.0 * (1 - per_bd_factor ** bdays)
     
                 rows_fx.append({
                     "Ticker": tkr,
