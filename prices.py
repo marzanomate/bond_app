@@ -579,10 +579,11 @@ class lecaps:
             self.price = p
         return p
 
+
 # ------------------------
-# Definición de LECAPs/BONCAPs
+# LECAPs / BONCAPs definidos a nivel módulo
 # ------------------------
-rows = [
+LECAPS_ROWS = [
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
     ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
@@ -692,32 +693,51 @@ def build_lecaps_metrics_table(rows: list[tuple], df_all: pd.DataFrame) -> pd.Da
     df_out = df_out[cols_order]
     return df_out
 
-def show_lecaps_plotly_table(rows: list[tuple], df_all: pd.DataFrame):
-    df_tbl = build_lecaps_metrics_table(rows, df_all)
+def show_lecaps_plotly_table(spec_rows: list, df_all: pd.DataFrame):
+    """
+    Toma la lista spec_rows (lista de tuplas) y df_all con precios.
+    Construye una tabla Plotly con: Vencimiento, Dur, Mod Dur, TIREA, Direct Return, TNA 30, TEM, Precio.
+    """
+    # Usamos tu helper que ya arma métricas base:
+    df = build_lecaps_metrics(spec_rows, df_all)
 
-    # valores por columna para plotly
-    headers = list(df_tbl.columns)
-    cells   = [df_tbl[c] for c in headers]
-
-    fig = go.Figure(data=[go.Table(
-        header=dict(
-            values=headers,
-            fill_color="#2e3b4e",
-            font=dict(color="white"),
-            align="center"
-        ),
-        cells=dict(
-            values=cells,
-            fill_color="#f5f7fb",
-            align="center",
-            format=[None, None, None, ".1f", ".1f", ".1f", ".1f", ".1f", ".1f", ".1f"]
+    # Agrego Direct Return = (1 + TIREA/100) ** Dur - 1 (en %)
+    if {"TIREA", "Dur"}.issubset(df.columns):
+        df["Direct Return"] = np.where(
+            df["TIREA"].notna() & df["Dur"].notna(),
+            ((1.0 + df["TIREA"] / 100.0) ** df["Dur"] - 1.0) * 100.0,
+            np.nan
         )
-    )])
+    else:
+        df["Direct Return"] = np.nan
 
+    # Orden y formato de columnas
+    cols = ["Ticker","Vencimiento","Dur","Mod Dur","TIREA","Direct Return","TNA 30","TEM","Precio"]
+    for c in ["Dur","Mod Dur","TIREA","Direct Return","TNA 30","TEM","Precio"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
+
+    # Si Vencimiento lo formateaste en build_lecaps_metrics como dd/mm/yy, lo dejamos así
+    df_show = df[[c for c in cols if c in df.columns]].copy()
+
+    # Construyo la tabla
+    fig = go.Figure(
+        data=[go.Table(
+            header=dict(
+                values=[c for c in df_show.columns],
+                fill_color="#1f77b4",
+                font=dict(color="white", size=12),
+                align="center"
+            ),
+            cells=dict(
+                values=[df_show[c] for c in df_show.columns],
+                fill_color="#f7f7f7",
+                align="center"
+            )
+        )]
+    )
     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0))
-    st.plotly_chart(fig, use_container_width=True)  # si querés evitar warning futuro: st.plotly_chart(fig, width="stretch")
-
-
+    return fig
 
 
 # =========================
@@ -1526,7 +1546,7 @@ def main():
                 "Paridad": "{:.1f}",
                 "Current Yield": "{:.1f}",
             }),
-            use_container_width=True,
+           width="stretch",
             hide_index=True
         )
         
@@ -1572,7 +1592,7 @@ def main():
             st.markdown("**Flujo consolidado por fecha (USD):**")
             st.dataframe(
                 df_cf,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Cupón":  st.column_config.NumberColumn(format="%.2f"),
@@ -1649,7 +1669,7 @@ def main():
                         "Paridad": "{:.1f}",
                         "Current Yield": "{:.1f}",
                     }),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
             else:
@@ -1717,7 +1737,7 @@ def main():
                 height=480,
                 margin=dict(l=10, r=10, t=10, b=10),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Tabla debajo (1 decimal, sin índice)
             st.markdown("**Bonos incluidos en las curvas:**")
@@ -1737,7 +1757,7 @@ def main():
                     "Paridad": "{:.1f}",
                     "Current Yield": "{:.1f}",
                 }),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
         else:
@@ -1747,8 +1767,9 @@ def main():
         st.title("LECAPs / BONCAPs")
         st.caption("Rendimientos implícitos con precios ASK (data912) y métricas clave.")
     
-        # tu lista rows ya definida arriba
-        show_lecaps_plotly_table(rows, df_all)
+        # Usar SIEMPRE la constante global (no declares una variable local llamada 'rows')
+        fig_lecaps = show_lecaps_plotly_table(LECAPS_ROWS, df_all)
+        st.plotly_chart(fig_lecaps, width="stretch")
 
     else:
         st.title("Otros")
