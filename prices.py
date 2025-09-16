@@ -1988,8 +1988,8 @@ def main():
                 qd1 = ql.Date(dt_mty.day, dt_mty.month, dt_mty.year)
                 bdays = cal.businessDaysBetween(qd0, qd1, False, False)  # sin contar extremos
     
-                band_upper = 1400.0 * (1 + per_bd_factor ** bdays)
-                band_lower = 1000.0 * (1 - per_bd_factor ** bdays)
+                band_upper = 1400.0 * ((1 + per_bd_factor) ** bdays)
+                band_lower = 1000.0 * ((1 - per_bd_factor) ** bdays)
     
                 rows_fx.append({
                     "Ticker": tkr,
