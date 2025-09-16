@@ -580,18 +580,155 @@ class lecaps:
         return p
 
 
+# =========================
+# Helpers de parsing Excel
+# =========================
+
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+def parse_date_cell(s):
+    if pd.isna(s):
+        return None
+    if isinstance(s, (datetime, pd.Timestamp)):
+        return pd.Timestamp(s).to_pydatetime()
+    s = str(s).strip().replace("\u00A0", " ")
+    token = s.split("T")[0].split()[0]
+    if ISO_DATE_RE.match(token):
+        return datetime.strptime(token, "%Y-%m-%d")
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(token, fmt)
+        except ValueError:
+            pass
+    return pd.to_datetime(token, dayfirst=True, errors="raise").to_pydatetime()
+
+def parse_date_list(cell):
+    if cell is None or (isinstance(cell, float) and np.isnan(cell)) or (isinstance(cell, str) and cell.strip() == ""):
+        return []
+    parts = str(cell).replace(",", "/").split(";")
+    out = []
+    for p in parts:
+        d = parse_date_cell(p)
+        out.append(d.strftime("%Y-%m-%d"))
+    return out
+
+def parse_float_cell(x):
+    if pd.isna(x):
+        return np.nan
+    s = str(x).strip().replace("%", "")
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return np.nan
+
+def normalize_rate_to_percent(r):
+    if pd.isna(r):
+        return np.nan
+    r = float(r)
+    return r*100.0 if r < 1 else r
+
+
+# =========================
+# Fetch precios (data912)
+# =========================
+
+@st.cache_data(ttl=300)
+def fetch_json(url):
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+def to_df(payload):
+    if isinstance(payload, dict):
+        for key in ("data", "results", "items", "bonds", "notes"):
+            if key in payload and isinstance(payload[key], list):
+                payload = payload[key]
+                break
+    return pd.json_normalize(payload)
+
+@st.cache_data(ttl=1200)  # 1200 segundos = 20 minutos
+def load_market_data():
+    url_bonds = "https://data912.com/live/arg_bonds"
+    url_notes = "https://data912.com/live/arg_notes"
+    url_corps = "https://data912.com/live/arg_corp"
+    url_mep = "https://data912.com/live/mep"
+
+    def fetch_json(url):
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        return r.json()
+
+    def to_df(payload):
+        if isinstance(payload, dict):
+            for key in ("data", "results", "items", "bonds", "notes"):
+                if key in payload and isinstance(payload[key], list):
+                    payload = payload[key]
+                    break
+        return pd.json_normalize(payload)
+
+    df_bonds = to_df(fetch_json(url_bonds)); df_bonds["source"] = "bonds"
+    df_notes = to_df(fetch_json(url_notes)); df_notes["source"] = "notes"
+    df_corps = to_df(fetch_json(url_corps)); df_corps["source"] = "corps"
+    df_mep   = to_df(fetch_json(url_mep));   df_mep["source"]   = "mep"
+
+    df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
+    return df_all, df_mep
+
+def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> float:
+    def _pick(row):
+        if prefer in row and pd.notna(row[prefer]): return float(row[prefer])
+        alt = "px_ask" if prefer == "px_bid" else "px_bid"
+        if alt in row and pd.notna(row[alt]): return float(row[alt])
+        raise KeyError("no valid bid/ask")
+    row = df_all.loc[df_all["symbol"] == name]
+    if not row.empty:
+        return _pick(row.iloc[0])
+    row = df_all.loc[df_all["symbol"] == f"{name}D"]
+    if not row.empty:
+        return _pick(row.iloc[0])
+    raise KeyError(f"Price not found for {name} (or {name}D)")
+
 # ----------------------------------------------------------------
 # Construyo enviroment para LECAPs/Boncaps
 # ----------------------------------------------------------------
 
 def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
-    row = df_all.loc[df_all["symbol"] == ticker]
+    if df_all is None or df_all.empty:
+        return np.nan
+
+    t = str(ticker).strip().upper()
+
+    # buscá por symbol; si no existe esa col, probá 'ticker'
+    col_sym = "symbol" if "symbol" in df_all.columns else ("ticker" if "ticker" in df_all.columns else None)
+    if col_sym is None:
+        return np.nan
+
+    row = df_all.loc[df_all[col_sym].astype(str).str.strip().str.upper() == t]
     if row.empty:
         return np.nan
-    px = row["px_ask"].iloc[0] if "px_ask" in row.columns else np.nan
-    if pd.isna(px) and "px_bid" in row.columns:
-        px = row["px_bid"].iloc[0]
-    return float(px) if pd.notna(px) else np.nan
+
+    # columnas posibles de ask/bid
+    ask_cols = [c for c in ("px_ask", "ask") if c in df_all.columns]
+    bid_cols = [c for c in ("px_bid", "bid") if c in df_all.columns]
+
+    val = np.nan
+    for c in ask_cols:
+        v = row[c].iloc[0]
+        if pd.notna(v):
+            val = float(v)
+            break
+    if pd.isna(val):
+        for c in bid_cols:
+            v = row[c].iloc[0]
+            if pd.notna(v):
+                val = float(v)
+                break
+
+    return val if pd.notna(val) else np.nan
 
 def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFrame:
     """
@@ -679,244 +816,6 @@ def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
     return df
-
-# =========================
-# Helpers de parsing Excel
-# =========================
-
-ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-def parse_date_cell(s):
-    if pd.isna(s):
-        return None
-    if isinstance(s, (datetime, pd.Timestamp)):
-        return pd.Timestamp(s).to_pydatetime()
-    s = str(s).strip().replace("\u00A0", " ")
-    token = s.split("T")[0].split()[0]
-    if ISO_DATE_RE.match(token):
-        return datetime.strptime(token, "%Y-%m-%d")
-    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(token, fmt)
-        except ValueError:
-            pass
-    return pd.to_datetime(token, dayfirst=True, errors="raise").to_pydatetime()
-
-def parse_date_list(cell):
-    if cell is None or (isinstance(cell, float) and np.isnan(cell)) or (isinstance(cell, str) and cell.strip() == ""):
-        return []
-    parts = str(cell).replace(",", "/").split(";")
-    out = []
-    for p in parts:
-        d = parse_date_cell(p)
-        out.append(d.strftime("%Y-%m-%d"))
-    return out
-
-def parse_float_cell(x):
-    if pd.isna(x):
-        return np.nan
-    s = str(x).strip().replace("%", "")
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
-    else:
-        s = s.replace(",", ".")
-    try:
-        return float(s)
-    except Exception:
-        return np.nan
-
-def normalize_rate_to_percent(r):
-    if pd.isna(r):
-        return np.nan
-    r = float(r)
-    return r*100.0 if r < 1 else r
-
-class lecaps:
-    def __init__(self, name, start_date, end_date, tem, price):
-        self.name = name
-        self.start_date = start_date
-        self.end_date = end_date
-        self.tem = tem
-        self.price = price
-        self.settlement = datetime.today() + timedelta(days=1)
-        self.calendar = ql.Argentina(ql.Argentina.Merval)
-        self.convention = ql.Following
-
-    def _adjust_next_business_day(self, dt: datetime) -> datetime:
-        qd = ql.Date(dt.day, dt.month, dt.year)
-        ad = self.calendar.adjust(qd, self.convention)  # roll forward if holiday/weekend
-        return datetime(ad.year(), int(ad.month()), ad.dayOfMonth())
-        
-    def generate_payment_dates(self):
-        d_settle = self._adjust_next_business_day(self.settlement)
-        d_mty    = self._adjust_next_business_day(self.end_date)
-        
-        return [d_settle.strftime("%Y-%m-%d"), d_mty.strftime("%Y-%m-%d")]
-
-    def cash_flow(self):
-        payments = []
-        capital = 100
-
-        dc = ql.Thirty360(ql.Thirty360.BondBasis)
-        ql_start = ql.Date(self.start_date.day, self.start_date.month, self.start_date.year)
-        ql_end = ql.Date(self.end_date.day, self.end_date.month, self.end_date.year)
-
-        days = dc.dayCount(ql_start, ql_end)
-        months = days / 30  # Approximate 30-day months
-
-        interests = (1 + self.tem) ** months - 1
-        final_payment = capital * (1 + interests)
-
-        payments.append(-self.price)
-        payments.append(final_payment)
-
-        return payments
-
-    def xnpv(self, dates=None, cash_flow=None, rate_custom=0.08):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        d0 = self.settlement
-        npv = sum([cf / (1.0 + rate_custom) ** ((date - d0).days / 365.0)
-                   for cf, date in zip(cash_flow, dates)])
-        return npv
-
-    def xirr(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
-        except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
-        return round(result * 100, 2)
-
-    def tem_from_irr(self):
-        irr = self.xirr() / 100                     # IRR as decimal (effective annual)
-        tem = (1 + irr) ** (30 / 365) - 1    # 30/365 convention
-        return round(tem * 100, 2)
-    
-    def tna30(self) :
-        tem_dec = ((1 + (self.xirr() / 100)) ** (30 / 365)) - 1
-        tna30 = tem_dec * 12
-        return round(tna30 * 100, 2)
-
-    def duration(self):
-        dates = self.generate_payment_dates()
-        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
-        cash_flow = self.cash_flow()
-        irr = self.xirr() / 100
-        d0 = self.settlement
-
-        duration = sum([(cf * (date - d0).days / 365.0) /
-                        (1 + irr) ** ((date - d0).days / 365.0)
-                        for cf, date in zip(cash_flow, dates)]) / self.price
-        return round(duration, 2)
-
-    def modified_duration(self):
-        dur = self.duration()
-        irr = self.xirr() / 100
-        return round(dur / (1 + irr), 2)  
-
-    # utilidades extra
-    def direct_return(self) -> float:
-        """
-        (1 + TIR)^Duration - 1   (en %)
-        Útil para el “rendimiento directo” que pediste en tablas.
-        """
-        r = self.xirr() / 100.0
-        T = self._T_years()
-        if not (np.isfinite(r) and T > 0):
-            return float("nan")
-        return round(((1.0 + r) ** T - 1.0) * 100.0, 2)
-
-    def price_from_irr(self, irr_pct: float) -> float:
-        """
-        Precio teórico dado un IRR anual (en %): P = CF / (1+r)^T
-        """
-        r = _to_decimal(irr_pct)
-        T = self._T_years()
-        if not (np.isfinite(r) and T > 0):
-            return float("nan")
-        return round(self.final_payment() / ((1.0 + r) ** T), 2)
-
-    def to_row(self) -> dict:
-        """
-        Fila con todas las métricas para DataFrame.
-        """
-        return {
-            "Ticker": self.name,
-            "Vencimiento": self._adjusted_dates()[1].strftime("%Y-%m-%d"),
-            "Precio": round(float(self.price), 2),
-            "Pago final": round(self.final_payment(), 2),
-            "TIREA": self.xirr(),
-            "TNA 30": self.tna30(),
-            "TEM (desde IRR)": self.tem_from_irr(),
-            "Dur": self.duration(),
-            "ModDur": self.modified_duration(),
-            "Convexidad": self.convexity(),
-            "Rend. directo": self.direct_return(),
-        }
-
-# =========================
-# Fetch precios (data912)
-# =========================
-
-@st.cache_data(ttl=300)
-def fetch_json(url):
-    r = requests.get(url, timeout=20)
-    r.raise_for_status()
-    return r.json()
-
-def to_df(payload):
-    if isinstance(payload, dict):
-        for key in ("data", "results", "items", "bonds", "notes"):
-            if key in payload and isinstance(payload[key], list):
-                payload = payload[key]
-                break
-    return pd.json_normalize(payload)
-
-@st.cache_data(ttl=1200)  # 1200 segundos = 20 minutos
-def load_market_data():
-    url_bonds = "https://data912.com/live/arg_bonds"
-    url_notes = "https://data912.com/live/arg_notes"
-    url_corps = "https://data912.com/live/arg_corp"
-    url_mep = "https://data912.com/live/mep"
-
-    def fetch_json(url):
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    def to_df(payload):
-        if isinstance(payload, dict):
-            for key in ("data", "results", "items", "bonds", "notes"):
-                if key in payload and isinstance(payload[key], list):
-                    payload = payload[key]
-                    break
-        return pd.json_normalize(payload)
-
-    df_bonds = to_df(fetch_json(url_bonds)); df_bonds["source"] = "bonds"
-    df_notes = to_df(fetch_json(url_notes)); df_notes["source"] = "notes"
-    df_corps = to_df(fetch_json(url_corps)); df_corps["source"] = "corps"
-    df_mep   = to_df(fetch_json(url_mep));   df_mep["source"]   = "mep"
-
-    df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
-    return df_all, df_mep
-
-def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> float:
-    def _pick(row):
-        if prefer in row and pd.notna(row[prefer]): return float(row[prefer])
-        alt = "px_ask" if prefer == "px_bid" else "px_bid"
-        if alt in row and pd.notna(row[alt]): return float(row[alt])
-        raise KeyError("no valid bid/ask")
-    row = df_all.loc[df_all["symbol"] == name]
-    if not row.empty:
-        return _pick(row.iloc[0])
-    row = df_all.loc[df_all["symbol"] == f"{name}D"]
-    if not row.empty:
-        return _pick(row.iloc[0])
-    raise KeyError(f"Price not found for {name} (or {name}D)")
 
 # =========================
 # Carga de ONs desde Excel
@@ -1381,9 +1280,11 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
     df_total["Total"] = df_total["Total"].round(2)
 
     return df_total
+ 
 # =========================
 # Calculadora de métricas (3 bonos, precio manual)
 # =========================
+
 def clone_with_price(b: bond_calculator_pro, new_price: float) -> bond_calculator_pro:
     return bond_calculator_pro(
         name=b.name, emisor=b.emisor, curr=b.curr, law=b.law,
@@ -1431,6 +1332,7 @@ LECAPS_SPEC = [
 # =========================
 # App UI
 # =========================
+
 def main():
     st.sidebar.title("Navegación")
     page = st.sidebar.radio("Elegí sección", ["Bonos HD", "Lecaps", "Otros"], index=0)
@@ -1573,6 +1475,7 @@ def main():
         # =========================
         # 3) Calculadora de Métricas
         # =========================
+     
         def compute_metrics_with_price(b: bond_calculator_pro, price_override: float | None = None, settlement=None) -> dict:
             # Clonado liviano con override de precio
             old_price = b.price
