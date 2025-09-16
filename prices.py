@@ -696,6 +696,26 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
 # Construyo enviroment para LECAPs/Boncaps
 # ----------------------------------------------------------------
 
+# --- Normalizador mínimo para df_all (NO cambia tus funciones de búsqueda) ---
+def normalize_market_df(df_all: pd.DataFrame) -> pd.DataFrame:
+    df = df_all.copy()
+
+    # Renombres frecuentes de data912 -> estándar interno
+    rename_map = {}
+    if "ticker" in df.columns: rename_map["ticker"] = "symbol"
+    if "ask" in df.columns:    rename_map["ask"] = "px_ask"
+    if "bid" in df.columns:    rename_map["bid"] = "px_bid"
+    df = df.rename(columns=rename_map)
+
+    # Formato esperado por el builder
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+    for c in ("px_ask", "px_bid"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    return df
+
 def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
     if df_all is None or df_all.empty:
         return np.nan
@@ -1309,6 +1329,10 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 # LECAPs / BONCAPs definidos a nivel módulo
 # ------------------------
 
+# 1) Traer mercado y normalizar (sin tocar tus searchers)
+df_all, df_mep = load_market_data()
+df_all_norm = normalize_market_df(df_all)
+
 LECAPS_SPEC = [
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
@@ -1635,7 +1659,7 @@ def main():
         st.title("LECAPs / BONCAPs / TAMAR")
     
         # construye tabla con precios ask desde df_all
-        df_lecaps = build_lecaps_table(LECAPS_SPEC, df_all)
+        df_lecaps = build_lecaps_table(LECAPS_SPEC, df_all_norm)
     
         st.dataframe(
             df_lecaps,
