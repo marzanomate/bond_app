@@ -1344,7 +1344,7 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 df_all, df_mep = load_market_data()
 df_all_norm = normalize_market_df(df_all)
 
-LECAPS_SPEC = [
+LECAPS_ROWS = [
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
     ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
