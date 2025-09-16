@@ -1967,7 +1967,7 @@ def main():
             # Bandas: parten 2025-04-07 en 1400/1000 y crecen 1% mensual prorrateado por días hábiles (Merval).
             base_date = datetime(2025, 4, 7)
             cal = ql.Argentina(ql.Argentina.Merval)
-            per_bd_factor = 0.01 ** (1.0 / 21.0)  # 1% por ~21 hábiles/mes
+            per_bd_factor = 1.01 ** (1.0 / 21.0)  - 1# 1% por ~21 hábiles/mes
     
             rows_fx = []
             for tkr in sel_fx:
