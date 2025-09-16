@@ -1850,7 +1850,7 @@ def main():
             df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
 
             # Asegurar numéricos
-            for c in ["TNA 30", "Modified Duration", "Precio (ASK)", "Duration", "Retorno Directo", "Rendimiento (TIR EA)", "TEM (implícita)"]:
+            for c in ["TNA 30", "Modified Duration", "Precio", "Duration", "Retorno Directo", "Rendimiento (TIR EA)", "TEM"]:
                 if c in df_curve.columns:
                     df_curve[c] = pd.to_numeric(df_curve[c], errors="coerce")
 
@@ -1872,9 +1872,9 @@ def main():
                         "Ticker": False,
                         "Tipo": True if "Tipo" in df_plot.columns else False,
                         "Vencimiento": True if "Vencimiento" in df_plot.columns else False,
-                        "Precio (ASK)": ":.2f" if "Precio (ASK)" in df_plot.columns else False,
+                        "Precio": ":.2f" if "Precio" in df_plot.columns else False,
                         "Rendimiento (TIR EA)": ":.2f" if "Rendimiento (TIR EA)" in df_plot.columns else False,
-                        "TEM (implícita)": ":.2f" if "TEM (implícita)" in df_plot.columns else False,
+                        "TEM": ":.2f" if "TEM" in df_plot.columns else False,
                         "Duration": ":.2f" if "Duration" in df_plot.columns else False,
                         "Modified Duration": ":.2f",
                         "Retorno Directo": ":.2f" if "Retorno Directo" in df_plot.columns else False,
