@@ -424,7 +424,160 @@ class bond_calculator_pro:
         # Current Yield sobre precio de mercado
         return round((coupon_annual / self.price) * 100.0, 1) 
 
+# --------------------------------------------------------
+# LECAPs/BONCAPS
+# --------------------------------------------------------
 
+class lecaps:
+    def __init__(self, name, start_date, end_date, tem, price):
+        self.name = name
+        self.start_date = start_date
+        self.end_date = end_date
+        self.tem = tem              # TEM en decimal (p.ej. 0.0235 = 2.35% mensual efectiva)
+        self.price = price          # precio clean por 100 VN
+        self.settlement = datetime.today() + timedelta(days=1)
+        self.calendar = ql.Argentina(ql.Argentina.Merval)
+        self.convention = ql.Following
+
+    def _adjust_next_business_day(self, dt: datetime) -> datetime:
+        qd = ql.Date(dt.day, dt.month, dt.year)
+        ad = self.calendar.adjust(qd, self.convention)  # roll forward si feriado/fin de semana
+        return datetime(ad.year(), int(ad.month()), ad.dayOfMonth())
+
+    def generate_payment_dates(self):
+        d_settle = self._adjust_next_business_day(self.settlement)
+        d_mty    = self._adjust_next_business_day(self.end_date)
+        return [d_settle.strftime("%Y-%m-%d"), d_mty.strftime("%Y-%m-%d")]
+
+    def _months_30_360(self) -> float:
+        """Meses 30/360 (Bond Basis) entre start_date y end_date."""
+        dc = ql.Thirty360(ql.Thirty360.BondBasis)
+        ql_start = ql.Date(self.start_date.day, self.start_date.month, self.start_date.year)
+        ql_end   = ql.Date(self.end_date.day,   self.end_date.month,   self.end_date.year)
+        days = dc.dayCount(ql_start, ql_end)
+        return days / 30.0
+
+    def _years_act365_from_settlement(self) -> float:
+        """Años ACT/365 desde settlement a maturity (para descontar con TIR)."""
+        d0 = self._adjust_next_business_day(self.settlement)
+        dm = self._adjust_next_business_day(self.end_date)
+        return max(0.0, (dm - d0).days / 365.0)
+
+    def cash_flow(self):
+        payments = []
+        capital = 100.0
+
+        months = self._months_30_360()
+        interests = (1.0 + self.tem) ** months - 1.0
+        final_payment = capital * (1.0 + interests)
+
+        payments.append(-float(self.price))
+        payments.append(float(final_payment))
+        return payments
+
+    def xnpv(self, dates=None, cash_flow=None, rate_custom=0.08):
+        dates = self.generate_payment_dates()
+        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
+        cash_flow = self.cash_flow()
+        d0 = self.settlement
+        return sum(
+            cf / (1.0 + rate_custom) ** ((dt - d0).days / 365.0)
+            for cf, dt in zip(cash_flow, dates)
+        )
+
+    def xirr(self):
+        # TIR efectiva anual en %
+        try:
+            result = scipy.optimize.newton(lambda r: self.xnpv(rate_custom=r), 0.0)
+        except RuntimeError:
+            result = scipy.optimize.brentq(lambda r: self.xnpv(rate_custom=r), -0.99, 1e10)
+        return round(result * 100.0, 2)
+
+    def tem_from_irr(self):
+        irr = self.xirr() / 100.0            # EA (decimal)
+        tem = (1.0 + irr) ** (30.0 / 365.0) - 1.0
+        return round(tem * 100.0, 2)
+
+    def tna30(self):
+        tem_dec = ((1.0 + (self.xirr() / 100.0)) ** (30.0 / 365.0)) - 1.0
+        tna30 = tem_dec * 12.0
+        return round(tna30 * 100.0, 2)
+
+    def duration(self):
+        # Macaulay con 2 flujos (precio inicial y pago final)
+        dates = self.generate_payment_dates()
+        dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
+        cash_flow = self.cash_flow()
+        irr = self.xirr() / 100.0
+        d0 = self.settlement
+        # evitar división por cero
+        if not np.isfinite(irr):
+            return float("nan")
+        # PV del bono (sin el flujo t0 negativo)
+        pv = sum(
+            cf / (1.0 + irr) ** ((dt - d0).days / 365.0)
+            for i, (cf, dt) in enumerate(zip(cash_flow, dates)) if i > 0
+        )
+        if pv <= 0 or not np.isfinite(pv):
+            return float("nan")
+        mac = sum(
+            ((dt - d0).days / 365.0) * (cf / (1.0 + irr) ** ((dt - d0).days / 365.0))
+            for i, (cf, dt) in enumerate(zip(cash_flow, dates)) if i > 0
+        ) / pv
+        return round(mac, 2)
+
+    def modified_duration(self):
+        dur = self.duration()
+        irr = self.xirr() / 100.0
+        if not np.isfinite(dur) or not np.isfinite(irr):
+            return float("nan")
+        return round(dur / (1.0 + irr), 2)
+
+    # ======================
+    # NUEVO 1: Direct return
+    # ======================
+    def direct_return(self):
+        """
+        Rendimiento directo = (1 + TIR)^Dur - 1  (devuelto en %).
+        Usa TIR efectiva anual y Duration (años).
+        """
+        try:
+            irr = self.xirr() / 100.0
+            dur = self.duration()
+            if not np.isfinite(irr) or not np.isfinite(dur):
+                return float("nan")
+            dr = (1.0 + irr) ** float(dur) - 1.0
+            return round(dr * 100.0, 2)
+        except Exception:
+            return float("nan")
+
+    # ==========================
+    # NUEVO 2: Price from IRR EA
+    # ==========================
+    def price_from_irr(self, irr_pct: float) -> float:
+        """
+        Dado una TIR efectiva anual en %, devuelve el precio (clean) que la
+        implica para este instrumento (2 flujos).
+        """
+        try:
+            t_years = self._years_act365_from_settlement()
+            if t_years <= 0:
+                return float("nan")
+            # Pago final según TEM y 30/360
+            months = self._months_30_360()
+            final_payment = 100.0 * ((1.0 + self.tem) ** months)
+            r = float(irr_pct) / 100.0
+            price = final_payment / ((1.0 + r) ** t_years)
+            return round(price, 2)
+        except Exception:
+            return float("nan")
+
+    # (opcional) helper para setear directamente el precio a partir de una TIR:
+    def set_price_from_irr(self, irr_pct: float) -> float:
+        p = self.price_from_irr(irr_pct)
+        if np.isfinite(p):
+            self.price = p
+        return p
 
 # =========================
 # Helpers de parsing Excel
