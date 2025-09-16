@@ -7,4 +7,4 @@ openpyxl>=3.1
 xlsxwriter>=3.2
 plotly
 Quantlib
-
+scipy
