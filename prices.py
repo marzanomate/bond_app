@@ -621,6 +621,9 @@ def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
 def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFrame:
     """
     rows: [(Ticker, Vencimiento(dd/mm/yyyy), Emision(dd/mm/yyyy), TEM(% mensual), Tipo), ...]
+    Devuelve un DF con:
+      Ticker, Tipo, Vencimiento, Precio (ASK), Rendimiento (TIR EA), Direct Return,
+      TNA 30, TEM (implícita), Duration, Modified Duration
     """
     df_spec = pd.DataFrame(rows, columns=["Ticker","Vencimiento","Emision","TEM_ref","Tipo"])
     # parse fechas (día/mes/año)
@@ -639,85 +642,68 @@ def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFram
             if any(pd.isna(r[k]) for k in ["Vencimiento","Emision","TEM_dec","Precio"]):
                 raise ValueError("inputs incompletos")
 
-            # objeto
             obj = lecaps(
                 name=r["Ticker"],
                 start_date=r["Emision"].to_pydatetime(),
                 end_date=r["Vencimiento"].to_pydatetime(),
-                tem=float(r["TEM_dec"]),        # TEM contractual (mensual en decimal)
-                price=float(r["Precio"])        # precio ask
+                tem=float(r["TEM_dec"]),   # TEM contractual mensual (decimal)
+                price=float(r["Precio"])   # precio ask
             )
 
-            # métricas (desde precio ask)
-            tir_pct = obj.xirr()                       # % EA (tu método ya devuelve en %)
+            # métricas
+            tir_pct = obj.xirr()                     # % EA (tu método ya devuelve en %)
             irr_dec = tir_pct / 100.0
-            dur     = obj.duration()                   # años
+            dur     = obj.duration()                 # años
             md      = obj.modified_duration()
-            tna30   = obj.tna30()                      # % (a 30/365 * 12)
-            tem_imp = obj.tem_from_irr()               # % mensual implícita
+            tna30   = obj.tna30()                    # % (30/365 * 12)
+            tem_imp = obj.tem_from_irr()             # % mensual implícita
             direct  = ((1.0 + irr_dec) ** dur - 1.0) * 100.0  # %
 
             out_rows.append({
                 "Ticker": r["Ticker"],
-                "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y"),
-                "Precio (ASK)": round(float(r["Precio"]), 1),
-                "Duration": round(dur, 1),
-                "Modified Duration": round(md, 1),
-                "Rendimiento (TIR EA)": round(tir_pct, 1),
-                "Direct Return": round(direct, 1),
-                "TNA 30": round(tna30, 1),
-                "TEM (implícita)": round(tem_imp, 1),
                 "Tipo": r["Tipo"],
+                "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y"),
+                "Precio (ASK)": round(float(r["Precio"]), 2),
+                "Rendimiento (TIR EA)": round(tir_pct, 2),
+                "Direct Return": round(direct, 2),
+                "TNA 30": round(tna30, 2),
+                "TEM (implícita)": round(tem_imp, 2),
+                "Duration": round(dur, 2),
+                "Modified Duration": round(md, 2),
             })
         except Exception:
             out_rows.append({
                 "Ticker": r.get("Ticker"),
-                "Vencimiento": r.get("Vencimiento").date().strftime("%d/%m/%Y") if pd.notna(r.get("Vencimiento")) else "",
+                "Tipo": r.get("Tipo"),
+                "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y") if pd.notna(r.get("Vencimiento")) else "",
                 "Precio (ASK)": np.nan,
-                "Duration": np.nan,
-                "Modified Duration": np.nan,
                 "Rendimiento (TIR EA)": np.nan,
                 "Direct Return": np.nan,
                 "TNA 30": np.nan,
                 "TEM (implícita)": np.nan,
-                "Tipo": r.get("Tipo"),
+                "Duration": np.nan,
+                "Modified Duration": np.nan,
             })
 
-    df_out = pd.DataFrame(out_rows)
-
-    # ordenar columnas como pediste
     cols_order = [
         "Ticker","Tipo","Vencimiento","Precio (ASK)",
         "Rendimiento (TIR EA)","Direct Return","TNA 30","TEM (implícita)",
         "Duration","Modified Duration"
     ]
-    df_out = df_out[cols_order]
-    return df_out
+    return pd.DataFrame(out_rows)[cols_order]
 
-def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame, today=None):
-    # Calcular métricas base
-    df = build_lecaps_metrics(spec_rows, df_all, today=today)
 
-    # Direct Return = (1 + TIREA/100)^Dur - 1
-    if {"TIREA", "Dur"}.issubset(df.columns):
-        df["Direct Return"] = ((1 + df["TIREA"] / 100.0) ** df["Dur"] - 1.0) * 100.0
-    else:
-        df["Direct Return"] = np.nan
-
-    # Reordenar columnas (según lo que pediste)
-    cols = [
-        "Ticker", "Tipo", "Vencimiento",
-        "Precio", "TIREA", "TNA 30", "TEM",
-        "Dur", "Mod Dur", "Convexidad", "Direct Return"
-    ]
-    df_show = df[[c for c in cols if c in df.columns]].copy()
-
-    # Redondeo
-    for c in ["Precio","TIREA","TNA 30","TEM","Dur","Mod Dur","Convexidad","Direct Return"]:
-        if c in df_show.columns:
-            df_show[c] = pd.to_numeric(df_show[c], errors="coerce").round(2)
-
-    return df_show
+def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
+    """
+    Versión simple que usa build_lecaps_metrics y devuelve el DF listo para mostrar.
+    (Sin argumento 'today' para evitar el error.)
+    """
+    df = build_lecaps_metrics(spec_rows, df_all)
+    # Asegurar redondeo uniforme a 2 decimales en numéricos:
+    for c in ["Precio (ASK)","Rendimiento (TIR EA)","Direct Return","TNA 30","TEM (implícita)","Duration","Modified Duration"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
+    return df
 
 # =========================
 # Helpers de parsing Excel
@@ -1746,13 +1732,8 @@ def main():
         st.title("LECAPs / BONCAPs")
         st.caption("Rendimientos implícitos con precios ASK y métricas clave.")
     
-        df_lecaps = build_lecaps_table(LECAPS_ROWS, df_all)
-    
-        st.dataframe(
-            df_lecaps,
-            width="stretch",
-            hide_index=True
-        )
+        df_lecaps = build_lecaps_table(rows, df_all)
+        st.dataframe(df_lecaps, width="stretch", hide_index=True)
 
     else:
         st.title("Otros")
