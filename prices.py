@@ -617,7 +617,7 @@ def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
         px = row["px_bid"].iloc[0]
     return float(px) if pd.notna(px) else np.nan
 
-def build_lecaps_metrics_table(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFrame:
+def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFrame:
     """
     rows: [(Ticker, Vencimiento(dd/mm/yyyy), Emision(dd/mm/yyyy), TEM(% mensual), Tipo), ...]
     """
