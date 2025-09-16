@@ -771,6 +771,8 @@ def build_lecaps_metrics(rows, df_all, today=None):
         precio = px_df.get("px_ask", pd.Series(np.nan, index=px_df.index))
         if "px_bid" in px_df.columns:
             precio = precio.fillna(px_df["px_bid"])
+        # >>> ajuste ask*1.005 (o bid si fue fallback)
+        precio = precio * 1.005
         px_df = pd.DataFrame({"Ticker": px_df["symbol"], "Precio": precio})
         df_spec = df_spec.merge(px_df, on="Ticker", how="left")
     else:
@@ -808,11 +810,11 @@ def build_lecaps_metrics(rows, df_all, today=None):
                 "Ticker": r["Ticker"],
                 "Tipo": r["Tipo"],
                 "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y"),
-                "Precio (ASK)": round(float(r["Precio"]), 2),
+                "Precio": round(float(r["Precio"]), 2),
                 "Rendimiento (TIR EA)": round(tirea, 2) if pd.notna(tirea) else np.nan,
-                "Direct Return": round(direct, 2) if pd.notna(direct) else np.nan,
+                "Retorno Directo": round(direct, 2) if pd.notna(direct) else np.nan,
                 "TNA 30": round(tna30, 2) if pd.notna(tna30) else np.nan,
-                "TEM (implícita)": round(tem_i, 2) if pd.notna(tem_i) else np.nan,
+                "TEM": round(tem_i, 2) if pd.notna(tem_i) else np.nan,
                 "Duration": round(dur, 2) if pd.notna(dur) else np.nan,
                 "Modified Duration": round(md, 2) if pd.notna(md) else np.nan,
             })
