@@ -1840,7 +1840,7 @@ def main():
     
         # ---------- Curva excluyendo TTM, TTJ, TTS, TTD ----------
         st.divider()
-        st.subheader("Curva (sin TTM, TTJ, TTS, TTD)")
+        st.subheader("Curva Tasa Fija")
     
         if df_lecaps.empty:
             st.info("No hay datos de LECAPs/BONCAPs para graficar.")
@@ -1850,10 +1850,10 @@ def main():
             df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
     
             # Asegurar numéricos y renombrar TIR para el gráfico
-            for c in ["Rendimiento (TIR EA)", "Modified Duration"]:
+            for c in ["TNA 30", "Modified Duration"]:
                 if c in df_curve.columns:
                     df_curve[c] = pd.to_numeric(df_curve[c], errors="coerce")
-            df_plot = df_curve.rename(columns={"Rendimiento (TIR EA)": "TIR"})
+            df_plot = df_curve.rename(columns={"TNA 30": "TIR"})
     
             if df_plot["Modified Duration"].gt(0).sum() == 0:
                 st.info("No hay Modified Duration > 0 para ajustar una curva logarítmica.")
@@ -1862,7 +1862,7 @@ def main():
                 fig = px.scatter(
                     df_plot,
                     x="Modified Duration",
-                    y="TIR",
+                    y="TNA 30",
                     color="Tipo",
                     hover_name="Ticker",
                     text="Ticker",                   # etiquetas
@@ -1887,11 +1887,11 @@ def main():
                 )
     
                 # --- Ajuste logarítmico global: TIR = a + b * ln(MD) ---
-                df_fit = df_plot[["Modified Duration", "TIR"]].dropna()
+                df_fit = df_plot[["Modified Duration", "TNA 30"]].dropna()
                 df_fit = df_fit[df_fit["Modified Duration"] > 0]   # ln(x) requiere x>0
     
                 x = df_fit["Modified Duration"].to_numpy(dtype=float)
-                y = df_fit["TIR"].to_numpy(dtype=float)
+                y = df_fit["TNA 30"].to_numpy(dtype=float)
                 Xlog = np.log(x)
     
                 # Coeficientes
@@ -1905,8 +1905,7 @@ def main():
                     go.Scatter(
                         x=x_line,
                         y=y_line,
-                        mode="lines",
-                        name="Curva log (TIR = a + b·ln MD)"
+                        mode="lines"
                     )
                 )
     
@@ -1917,8 +1916,8 @@ def main():
                 r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
     
                 fig.update_layout(
-                    xaxis_title="Modified Duration (años)",
-                    yaxis_title="TIR (e.a. %)",
+                    xaxis_title="Modified Duration",
+                    yaxis_title="TNA 30",
                     legend_title="Tipo",
                     height=480,
                     margin=dict(l=10, r=10, t=10, b=10),
