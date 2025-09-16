@@ -17,6 +17,7 @@ from dateutil.relativedelta import relativedelta
 # =========================
 # Config Streamlit
 # =========================
+
 st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
  
 # =========================
@@ -425,6 +426,40 @@ class bond_calculator_pro:
         # Current Yield sobre precio de mercado
         return round((coupon_annual / self.price) * 100.0, 1) 
 
+    # ==========================
+    # Precio <-> Rendimiento
+    # ==========================
+    def price_from_irr(self, irr_pct: float, settlement: Optional[datetime] = None) -> float:
+        """
+        Dada una TIR efectiva anual en %, calcula el precio clean que la implica
+        para este bono (descontando todos los flujos futuros a esa tasa).
+        """
+        try:
+            r = float(irr_pct) / 100.0
+            if not np.isfinite(r):
+                return float("nan")
+            t = self._times_years(settlement)
+            c = np.array(self.cash_flow(settlement), dtype=float)
+            c[0] = 0.0  # ignorar el flujo inicial negativo (precio), lo vamos a calcular
+            disc = (1.0 + r) ** t
+            price = float(np.sum(c / disc))
+            return round(price, 2)
+        except Exception:
+            return float("nan")
+
+    def yield_from_price(self, price_override: float, settlement: Optional[datetime] = None) -> float:
+        """
+        Dado un precio clean, devuelve la TIR efectiva anual (%) del bono.
+        (No deja mutado el objeto.)
+        """
+        old = self.price
+        try:
+            self.price = float(price_override)
+            y = self.xirr(settlement)
+            return float(y)
+        finally:
+            self.price = old
+
 # --------------------------------------------------------
 # LECAPs/BONCAPS
 # --------------------------------------------------------
@@ -572,6 +607,18 @@ class lecaps:
             return round(price, 2)
         except Exception:
             return float("nan")
+
+    def yield_from_price(self, price_override: float) -> float:
+        """
+        Dado un precio clean, devuelve la TIR efectiva anual (%) de la LECAP/BONCAP.
+        No deja mutado el objeto.
+        """
+        old = self.price
+        try:
+            self.price = float(price_override)
+            return float(self.xirr())
+        finally:
+            self.price = old
 
     # (opcional) helper para setear directamente el precio a partir de una TIR:
     def set_price_from_irr(self, irr_pct: float) -> float:
@@ -838,6 +885,43 @@ def build_lecaps_metrics(rows, df_all, today=None):
         "Duration","Modified Duration"
     ]
     return pd.DataFrame(out)[cols]
+
+def build_lecaps_objects(rows, df_all_norm) -> dict[str, lecaps]:
+    """
+    Crea objetos 'lecaps' a partir de LECAPS_ROWS y precios de mercado
+    usando ASK con fallback a BID, multiplicado por 1.005.
+    Retorna un dict: {ticker: lecaps_obj}
+    """
+    # armo un map rápido de {symbol: precio_ask/bid}
+    px_df = df_all_norm.copy()
+    if "symbol" not in px_df.columns:
+        # intentar normalizar por las dudas
+        px_df = normalize_market_df(px_df)
+
+    # precio = ask con fallback en bid
+    precio = px_df.get("px_ask", pd.Series(np.nan, index=px_df.index))
+    if "px_bid" in px_df.columns:
+        precio = precio.fillna(px_df["px_bid"])
+    px_map = dict(zip(px_df["symbol"].astype(str).str.upper(), (precio * 1.005).astype(float)))
+
+    le_map = {}
+    for (ticker, vto, emi, tem, tipo) in rows:
+        try:
+            price = float(px_map.get(str(ticker).strip().upper(), np.nan))
+            if not np.isfinite(price):
+                continue
+            obj = lecaps(
+                name=ticker,
+                start_date=parse_date_cell(emi),
+                end_date=parse_date_cell(vto),
+                tem=float(tem)/100.0 if float(tem) >= 1 else float(tem),
+                price=price
+            )
+            le_map[ticker] = obj
+        except Exception:
+            # si algo falla con un ticker, lo salteamos
+            pass
+    return le_map
 
 def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
     """
@@ -1683,16 +1767,152 @@ def main():
             
     elif page == "Lecaps":
         st.title("LECAPs / BONCAPs / TAMAR")
-
-        # df_all viene de load_market_data()
+    
+        # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
         df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
     
-        st.dataframe(
-            df_lecaps,
-            width="stretch",
-            hide_index=True
-        )
+        st.subheader("Métricas de LECAPs/BONCAPs")
+        st.dataframe(df_lecaps, use_container_width=True, hide_index=True)
+    
+        # ---------- Objetos para cálculos (solo LECAPs) ----------
+        le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm)
+    
+        st.divider()
+        st.subheader("Precio ↔ Rendimiento (LECAPs/BONCAPs)")
+    
+        tab_prc, tab_yld = st.tabs(["Precio → Rendimiento", "Rendimiento → Precio"])
+    
+        with tab_prc:
+            if not le_map:
+                st.info("No se pudieron construir objetos LECAP. Verificá precios de mercado.")
+            else:
+                tickers = sorted(le_map.keys())
+                bname = st.selectbox("Elegí LECAP/BONCAP", tickers, key="lx_px2y")
+                prc_in = st.number_input("Precio (clean) → TIR e.a. (%)", min_value=0.0, step=0.1, value=0.0, key="lx_px")
+                if st.button("Calcular TIR", key="btn_lx_px2y"):
+                    b = le_map[bname]
+                    y = b.yield_from_price(prc_in)
+                    if np.isnan(y):
+                        st.error("No se pudo calcular la TIR con ese precio.")
+                    else:
+                        st.success(f"TIR efectiva anual: **{y:.2f}%**")
+    
+                        # Métricas a ese precio (sin mutar el original)
+                        old = b.price
+                        try:
+                            b.price = prc_in
+                            df_one = pd.DataFrame([{
+                                "Ticker": b.name,
+                                "Precio": prc_in,
+                                "TIR": b.xirr(),
+                                "TNA 30": b.tna30(),
+                                "Duration": b.duration(),
+                                "Modified Duration": b.modified_duration(),
+                                "Direct Return": b.direct_return(),
+                            }])
+                        finally:
+                            b.price = old
+    
+                        for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Direct Return"]:
+                            df_one[c] = pd.to_numeric(df_one[c], errors="coerce")
+                        df_one["Precio"] = df_one["Precio"].round(2)
+                        for c in ["TIR","TNA 30","Duration","Modified Duration","Direct Return"]:
+                            df_one[c] = df_one[c].round(2)
+                        st.dataframe(df_one, use_container_width=True, hide_index=True)
+    
+        with tab_yld:
+            if not le_map:
+                st.info("No se pudieron construir objetos LECAP. Verificá precios de mercado.")
+            else:
+                tickers2 = sorted(le_map.keys())
+                bname2 = st.selectbox("Elegí LECAP/BONCAP", tickers2, key="lx_y2px")
+                yld_in = st.number_input("TIR e.a. (%) → Precio (clean)", min_value=-99.0, step=0.1, value=0.0, key="lx_y")
+                if st.button("Calcular Precio", key="btn_lx_y2px"):
+                    b2 = le_map[bname2]
+                    p = b2.price_from_irr(yld_in)
+                    if np.isnan(p):
+                        st.error("No se pudo calcular el precio con esa TIR.")
+                    else:
+                        st.success(f"Precio clean: **{p:.2f}**")
+    
+                        # Chequeo TIR con ese precio
+                        tir_check = b2.yield_from_price(p)
+                        st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
+    
+        # ---------- Curva excluyendo TTM, TTJ, TTS, TTD ----------
+        st.divider()
+        st.subheader("Curva (sin TTM, TTJ, TTS, TTD)")
+    
+        if df_lecaps.empty:
+            st.info("No hay datos de LECAPs/BONCAPs para graficar.")
+        else:
+            excl = {"TTM26", "TTJ26", "TTS26", "TTD26"}
+            df_curve = df_lecaps.copy()
+            df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
+    
+            # Asegurar numéricos
+            for c in ["Rendimiento (TIR EA)", "Modified Duration"]:
+                if c in df_curve.columns:
+                    df_curve[c] = pd.to_numeric(df_curve[c], errors="coerce")
+    
+            if df_curve.empty:
+                st.info("Todos los instrumentos quedaron excluidos por el filtro.")
+            else:
+                # Renombrar para el gráfico (coincidir ejes)
+                df_plot = df_curve.rename(columns={
+                    "Rendimiento (TIR EA)": "TIR",
+                })
+                fig = px.scatter(
+                    df_plot,
+                    x="Modified Duration",
+                    y="TIR",
+                    color="Tipo",
+                    hover_name="Ticker",
+                    hover_data={
+                        "Ticker": False,
+                        "Tipo": True,
+                        "Vencimiento": True,
+                        "Precio (ASK)": ":.2f",
+                        "TIR": ":.2f",
+                        "TEM (implícita)": ":.2f",
+                        "Duration": ":.2f",
+                        "Modified Duration": ":.2f",
+                        "Direct Return": ":.2f",
+                        "TNA 30": ":.2f",
+                    },
+                    size_max=12,
+                )
+                fig.update_traces(marker=dict(size=12, line=dict(width=1)))
+                fig.update_layout(
+                    xaxis_title="Modified Duration (años)",
+                    yaxis_title="TIR (e.a. %)",
+                    legend_title="Tipo",
+                    height=460,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+    
+                st.markdown("**Tabla de la curva mostrada:**")
+                cols_show = [
+                    "Ticker","Tipo","Vencimiento","Precio (ASK)",
+                    "Rendimiento (TIR EA)","TNA 30","TEM (implícita)",
+                    "Duration","Modified Duration","Direct Return"
+                ]
+                cols_show = [c for c in cols_show if c in df_curve.columns]
+                st.dataframe(
+                    df_curve[cols_show].style.format({
+                        "Precio (ASK)": "{:.2f}",
+                        "Rendimiento (TIR EA)": "{:.2f}",
+                        "TNA 30": "{:.2f}",
+                        "TEM (implícita)": "{:.2f}",
+                        "Duration": "{:.2f}",
+                        "Modified Duration": "{:.2f}",
+                        "Direct Return": "{:.2f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
 
     else:
         st.title("Otros")
