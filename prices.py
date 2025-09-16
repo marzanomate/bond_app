@@ -579,6 +579,123 @@ class lecaps:
             self.price = p
         return p
 
+# ----------------------------------------------------------------
+# Construyo enviroment para LECAPs/Boncaps
+# ----------------------------------------------------------------
+
+def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
+    row = df_all.loc[df_all["symbol"] == ticker]
+    if row.empty:
+        return np.nan
+    px = row["px_ask"].iloc[0] if "px_ask" in row.columns else np.nan
+    if pd.isna(px) and "px_bid" in row.columns:
+        px = row["px_bid"].iloc[0]
+    return float(px) if pd.notna(px) else np.nan
+
+def build_lecaps_metrics_table(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFrame:
+    """
+    rows: [(Ticker, Vencimiento(dd/mm/yyyy), Emision(dd/mm/yyyy), TEM(% mensual), Tipo), ...]
+    """
+    df_spec = pd.DataFrame(rows, columns=["Ticker","Vencimiento","Emision","TEM_ref","Tipo"])
+    # parse fechas (día/mes/año)
+    df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
+    df_spec["Emision"]     = pd.to_datetime(df_spec["Emision"],     dayfirst=True, errors="coerce")
+
+    # TEM contractual a decimal mensual
+    df_spec["TEM_dec"] = pd.to_numeric(df_spec["TEM_ref"], errors="coerce") / 100.0
+
+    # Traer precio ASK (fallback a BID)
+    df_spec["Precio"] = df_spec["Ticker"].apply(lambda t: _get_ask_price(df_all, t))
+
+    out_rows = []
+    for _, r in df_spec.iterrows():
+        try:
+            if any(pd.isna(r[k]) for k in ["Vencimiento","Emision","TEM_dec","Precio"]):
+                raise ValueError("inputs incompletos")
+
+            # objeto
+            obj = lecaps(
+                name=r["Ticker"],
+                start_date=r["Emision"].to_pydatetime(),
+                end_date=r["Vencimiento"].to_pydatetime(),
+                tem=float(r["TEM_dec"]),        # TEM contractual (mensual en decimal)
+                price=float(r["Precio"])        # precio ask
+            )
+
+            # métricas (desde precio ask)
+            tir_pct = obj.xirr()                       # % EA (tu método ya devuelve en %)
+            irr_dec = tir_pct / 100.0
+            dur     = obj.duration()                   # años
+            md      = obj.modified_duration()
+            tna30   = obj.tna30()                      # % (a 30/365 * 12)
+            tem_imp = obj.tem_from_irr()               # % mensual implícita
+            direct  = ((1.0 + irr_dec) ** dur - 1.0) * 100.0  # %
+
+            out_rows.append({
+                "Ticker": r["Ticker"],
+                "Vencimiento": r["Vencimiento"].date().strftime("%d/%m/%Y"),
+                "Precio (ASK)": round(float(r["Precio"]), 1),
+                "Duration": round(dur, 1),
+                "Modified Duration": round(md, 1),
+                "Rendimiento (TIR EA)": round(tir_pct, 1),
+                "Direct Return": round(direct, 1),
+                "TNA 30": round(tna30, 1),
+                "TEM (implícita)": round(tem_imp, 1),
+                "Tipo": r["Tipo"],
+            })
+        except Exception:
+            out_rows.append({
+                "Ticker": r.get("Ticker"),
+                "Vencimiento": r.get("Vencimiento").date().strftime("%d/%m/%Y") if pd.notna(r.get("Vencimiento")) else "",
+                "Precio (ASK)": np.nan,
+                "Duration": np.nan,
+                "Modified Duration": np.nan,
+                "Rendimiento (TIR EA)": np.nan,
+                "Direct Return": np.nan,
+                "TNA 30": np.nan,
+                "TEM (implícita)": np.nan,
+                "Tipo": r.get("Tipo"),
+            })
+
+    df_out = pd.DataFrame(out_rows)
+
+    # ordenar columnas como pediste
+    cols_order = [
+        "Ticker","Tipo","Vencimiento","Precio (ASK)",
+        "Rendimiento (TIR EA)","Direct Return","TNA 30","TEM (implícita)",
+        "Duration","Modified Duration"
+    ]
+    df_out = df_out[cols_order]
+    return df_out
+
+def show_lecaps_plotly_table(rows: list[tuple], df_all: pd.DataFrame):
+    df_tbl = build_lecaps_metrics_table(rows, df_all)
+
+    # valores por columna para plotly
+    headers = list(df_tbl.columns)
+    cells   = [df_tbl[c] for c in headers]
+
+    fig = go.Figure(data=[go.Table(
+        header=dict(
+            values=headers,
+            fill_color="#2e3b4e",
+            font=dict(color="white"),
+            align="center"
+        ),
+        cells=dict(
+            values=cells,
+            fill_color="#f5f7fb",
+            align="center",
+            format=[None, None, None, ".1f", ".1f", ".1f", ".1f", ".1f", ".1f", ".1f"]
+        )
+    )])
+
+    fig.update_layout(margin=dict(l=0, r=0, t=10, b=0))
+    st.plotly_chart(fig, use_container_width=True)  # si querés evitar warning futuro: st.plotly_chart(fig, width="stretch")
+
+
+
+
 # =========================
 # Helpers de parsing Excel
 # =========================
@@ -1603,8 +1720,11 @@ def main():
             st.info("No hay bonos para los emisores seleccionados.")
             
     elif page == "Lecaps":
-        st.title("Lecaps")
-        st.info("Sección en construcción. Próximamente métricas y simuladores para Lecaps.")
+        st.title("LECAPs / BONCAPs")
+        st.caption("Rendimientos implícitos con precios ASK (data912) y métricas clave.")
+    
+        # tu lista rows ya definida arriba
+        show_lecaps_plotly_table(rows, df_all)
 
     else:
         st.title("Otros")
