@@ -574,7 +574,7 @@ class lecaps:
     # ======================
     def direct_return(self):
         """
-        Rendimiento directo = (1 + TIR)^Dur - 1  (devuelto en %).
+        Retorno Directo = (1 + TIR)^Dur - 1  (devuelto en %).
         Usa TIR efectiva anual y Duration (años).
         """
         try:
@@ -1876,7 +1876,7 @@ def main():
                         "TEM": ":.2f",
                         "Duration": ":.2f",
                         "Modified Duration": ":.2f",
-                        "Rendimiento Directo": ":.2f",
+                        "Retorno Directo": ":.2f",
                         "TNA 30": ":.2f",
                     },
                     size_max=12,
@@ -1938,7 +1938,7 @@ def main():
                 cols_show = [
                     "Ticker","Tipo","Vencimiento","Precio",
                     "Rendimiento (TIR EA)","TNA 30","TEM",
-                    "Duration","Modified Duration","Rendimiento Directo"
+                    "Duration","Modified Duration","Retorno Directo"
                 ]
                 cols_show = [c for c in cols_show if c in df_curve.columns]
                 st.dataframe(
@@ -1949,7 +1949,7 @@ def main():
                         "TEM": "{:.2f}",
                         "Duration": "{:.2f}",
                         "Modified Duration": "{:.2f}",
-                        "Rendimiento Directo": "{:.2f}",
+                        "Retorno Directo": "{:.2f}",
                     }),
                     use_container_width=True,
                     hide_index=True
