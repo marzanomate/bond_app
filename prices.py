@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
-
+import QuantLib as ql
+from scipy import optimize
 import numpy as np
 import pandas as pd
 import requests
@@ -488,9 +489,9 @@ class lecaps:
     def xirr(self):
         # TIR efectiva anual en %
         try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(rate_custom=r), 0.0)
-        except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(rate_custom=r), -0.99, 1e10)
+            result = optimize.newton(lambda r: self.xnpv(rate_custom=r), 0.0)
+        except Exception:
+            result = optimize.brentq(lambda r: self.xnpv(rate_custom=r), -0.99, 1e10)
         return round(result * 100.0, 2)
 
     def tem_from_irr(self):
@@ -853,24 +854,23 @@ def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
 # =========================
 
 @st.cache_resource(show_spinner=False)
-def load_bcp_from_excel(
-    df_all: pd.DataFrame,
-    adj: float = 1.0,
-    price_col_prefer: str = "px_bid"
-) -> list:
+def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer: str = "px_bid") -> list:
     url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
-    r = requests.get(url_excel_raw, timeout=25)
-    r.raise_for_status()
-    content = r.content
+    try:
+        r = requests.get(url_excel_raw, timeout=25)
+        r.raise_for_status()
+        content = r.content
+    except Exception as e:
+        raise RuntimeError(f"No se pudo descargar el Excel de ONs: {e}")
 
     # sanity-check: archivos .xlsx son ZIP y empiezan con 'PK'
     if not content.startswith(b"PK"):
-        raise RuntimeError(
-            "El contenido descargado no parece un .xlsx (posible rate-limit de GitHub o URL incorrecta)."
-        )
+        raise RuntimeError("El contenido descargado no parece un .xlsx (posible rate-limit de GitHub o URL incorrecta).")
 
-    # 🔧 fuerza el engine a openpyxl
-    raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
+    try:
+        raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
+    except Exception as e:
+        raise RuntimeError(f"No se pudo abrir el Excel de ONs: {e}")
 
     required = [
         "name","empresa","curr","law","start_date","end_date",
@@ -1340,10 +1340,6 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 # LECAPs / BONCAPs definidos a nivel módulo
 # ------------------------
 
-# 1) Traer mercado y normalizar (sin tocar tus searchers)
-df_all, df_mep = load_market_data()
-df_all_norm = normalize_market_df(df_all)
-
 LECAPS_ROWS = [
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
@@ -1373,14 +1369,31 @@ def main():
     page = st.sidebar.radio("Elegí sección", ["Bonos HD", "Lecaps", "Otros"], index=0)
 
     # --- Carga de mercado + botón refrescar ---
-    df_all, df_mep = load_market_data()
+    with st.spinner("Cargando precios de mercado..."):
+        try:
+            df_all, df_mep = load_market_data()
+        except Exception as e:
+            st.error(f"Error al cargar precios de mercado: {e}")
+            df_all, df_mep = pd.DataFrame(), pd.DataFrame()
+
     if st.sidebar.button("🔄 Actualizar ahora"):
         load_market_data.clear()
-        df_all, df_mep = load_market_data()
-        st.sidebar.success("Precios actualizados.")
+        with st.spinner("Actualizando..."):
+            try:
+                df_all, df_mep = load_market_data()
+                st.sidebar.success("Precios actualizados.")
+            except Exception as e:
+                st.sidebar.error(f"Error al actualizar: {e}")
+                df_all, df_mep = pd.DataFrame(), pd.DataFrame()
+
+    df_all_norm = normalize_market_df(df_all)
 
     # --- Construcción de universos ---
-    ons_bonds = load_bcp_from_excel(df_all, adj=1.005, price_col_prefer="px_ask")
+    try:
+       ons_bonds = load_bcp_from_excel(df_all, adj=1.005, price_col_prefer="px_ask")
+    except Exception as e:
+       st.warning(f"No se pudo cargar el listado de ONs: {e}")
+       ons_bonds = []
     manual_bonds = manual_bonds_factory(df_all)
     all_bonds = ons_bonds + manual_bonds
     name_to_bond = {b.name: b for b in all_bonds}
