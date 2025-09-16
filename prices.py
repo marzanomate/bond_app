@@ -1844,117 +1844,117 @@ def main():
     st.divider()
     st.subheader("BONCAPs/LECAPs")
 
-    if df_lecaps.empty:
-        st.info("No hay datos de LECAPs/BONCAPs para graficar.")
-    else:
-        excl = {"TTM26", "TTJ26", "TTS26", "TTD26"}
-        df_curve = df_lecaps.copy()
-        df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
-
-        # Asegurar numéricos y renombrar TIR para el gráfico
-        for c in ["Rendimiento (TIR EA)", "Modified Duration"]:
-            if c in df_curve.columns:
-                df_curve[c] = pd.to_numeric(df_curve[c], errors="coerce")
-        df_plot = df_curve.rename(columns={"Rendimiento (TIR EA)": "TIR"})
-
-        if df_plot["Modified Duration"].gt(0).sum() == 0:
-            st.info("No hay Modified Duration > 0 para ajustar una curva logarítmica.")
+        if df_lecaps.empty:
+            st.info("No hay datos de LECAPs/BONCAPs para graficar.")
         else:
-            # --- Scatter con etiquetas por ticker ---
-            fig = px.scatter(
-                df_plot,
-                x="Modified Duration",
-                y="TIR",
-                color="Tipo",
-                hover_name="Ticker",
-                text="Ticker",                   # ← etiquetas
-                hover_data={
-                    "Ticker": False,
-                    "Tipo": True,
-                    "Vencimiento": True,
-                    "Precio (ASK)": ":.2f",
-                    "TIR": ":.2f",
-                    "TEM (implícita)": ":.2f",
-                    "Duration": ":.2f",
-                    "Modified Duration": ":.2f",
-                    "Direct Return": ":.2f",
-                    "TNA 30": ":.2f",
-                },
-                size_max=12,
-            )
-            fig.update_traces(
-                marker=dict(size=12, line=dict(width=1)),
-                textposition="top center",      # ← posición de etiqueta
-                textfont=dict(size=10)          # ← tamaño de etiqueta
-            )
-
-            # --- Ajuste logarítmico global: TIR = a + b * ln(MD) ---
-            df_fit = df_plot[["Modified Duration", "TIR"]].dropna()
-            df_fit = df_fit[df_fit["Modified Duration"] > 0]   # ln(x) requiere x>0
-
-            x = df_fit["Modified Duration"].to_numpy(dtype=float)
-            y = df_fit["TIR"].to_numpy(dtype=float)
-            Xlog = np.log(x)
-
-            # Coeficientes (b es pendiente sobre ln(MD), a es intercepto)
-            b, a = np.polyfit(Xlog, y, 1)
-
-            # Curva lisa para dibujar
-            x_line = np.linspace(x.min(), x.max(), 200)
-            y_line = a + b * np.log(x_line)
-
-            fig.add_trace(
-                go.Scatter(
-                    x=x_line,
-                    y=y_line,
-                    mode="lines",
-                    name="Curva log (TIR = a + b·ln MD)"
+            excl = {"TTM26", "TTJ26", "TTS26", "TTD26"}
+            df_curve = df_lecaps.copy()
+            df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
+    
+            # Asegurar numéricos y renombrar TIR para el gráfico
+            for c in ["Rendimiento (TIR EA)", "Modified Duration"]:
+                if c in df_curve.columns:
+                    df_curve[c] = pd.to_numeric(df_curve[c], errors="coerce")
+            df_plot = df_curve.rename(columns={"Rendimiento (TIR EA)": "TIR"})
+    
+            if df_plot["Modified Duration"].gt(0).sum() == 0:
+                st.info("No hay Modified Duration > 0 para ajustar una curva logarítmica.")
+            else:
+                # --- Scatter con etiquetas por ticker ---
+                fig = px.scatter(
+                    df_plot,
+                    x="Modified Duration",
+                    y="TIR",
+                    color="Tipo",
+                    hover_name="Ticker",
+                    text="Ticker",                   # ← etiquetas
+                    hover_data={
+                        "Ticker": False,
+                        "Tipo": True,
+                        "Vencimiento": True,
+                        "Precio (ASK)": ":.2f",
+                        "TIR": ":.2f",
+                        "TEM (implícita)": ":.2f",
+                        "Duration": ":.2f",
+                        "Modified Duration": ":.2f",
+                        "Direct Return": ":.2f",
+                        "TNA 30": ":.2f",
+                    },
+                    size_max=12,
                 )
-            )
-
-            # R^2 para referencia
-            y_hat = a + b * Xlog
-            ss_res = float(np.sum((y - y_hat) ** 2))
-            ss_tot = float(np.sum((y - y.mean()) ** 2))
-            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-
-            fig.update_layout(
-                xaxis_title="Modified Duration (años)",
-                yaxis_title="TIR (e.a. %)",
-                legend_title="Tipo",
-                height=480,
-                margin=dict(l=10, r=10, t=10, b=10),
-                annotations=[
-                    dict(
-                        x=0.99, y=0.02, xref="paper", yref="paper",
-                        xanchor="right", showarrow=False,
-                        text=f"a={a:.2f}, b={b:.2f}, R²={r2:.2f}"
+                fig.update_traces(
+                    marker=dict(size=12, line=dict(width=1)),
+                    textposition="top center",      # ← posición de etiqueta
+                    textfont=dict(size=10)          # ← tamaño de etiqueta
+                )
+    
+                # --- Ajuste logarítmico global: TIR = a + b * ln(MD) ---
+                df_fit = df_plot[["Modified Duration", "TIR"]].dropna()
+                df_fit = df_fit[df_fit["Modified Duration"] > 0]   # ln(x) requiere x>0
+    
+                x = df_fit["Modified Duration"].to_numpy(dtype=float)
+                y = df_fit["TIR"].to_numpy(dtype=float)
+                Xlog = np.log(x)
+    
+                # Coeficientes (b es pendiente sobre ln(MD), a es intercepto)
+                b, a = np.polyfit(Xlog, y, 1)
+    
+                # Curva lisa para dibujar
+                x_line = np.linspace(x.min(), x.max(), 200)
+                y_line = a + b * np.log(x_line)
+    
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_line,
+                        y=y_line,
+                        mode="lines",
+                        name="Curva log (TIR = a + b·ln MD)"
                     )
-                ],
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.markdown("**Tabla de la curva mostrada:**")
-            cols_show = [
-                "Ticker","Tipo","Vencimiento","Precio (ASK)",
-                "Rendimiento (TIR EA)","TNA 30","TEM (implícita)",
-                "Duration","Modified Duration","Direct Return"
-            ]
-            cols_show = [c for c in cols_show if c in df_curve.columns]
-            st.dataframe(
-                df_curve[cols_show].style.format({
-                    "Precio (ASK)": "{:.2f}",
-                    "Rendimiento (TIR EA)": "{:.2f}",
-                    "TNA 30": "{:.2f}",
-                    "TEM (implícita)": "{:.2f}",
-                    "Duration": "{:.2f}",
-                    "Modified Duration": "{:.2f}",
-                    "Direct Return": "{:.2f}",
-                }),
-                use_container_width=True,
-                hide_index=True
-            )
+                )
+    
+                # R^2 para referencia
+                y_hat = a + b * Xlog
+                ss_res = float(np.sum((y - y_hat) ** 2))
+                ss_tot = float(np.sum((y - y.mean()) ** 2))
+                r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+    
+                fig.update_layout(
+                    xaxis_title="Modified Duration (años)",
+                    yaxis_title="TIR (e.a. %)",
+                    legend_title="Tipo",
+                    height=480,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    annotations=[
+                        dict(
+                            x=0.99, y=0.02, xref="paper", yref="paper",
+                            xanchor="right", showarrow=False,
+                            text=f"a={a:.2f}, b={b:.2f}, R²={r2:.2f}"
+                        )
+                    ],
+                )
+    
+                st.plotly_chart(fig, use_container_width=True)
+    
+                st.markdown("**Tabla de la curva mostrada:**")
+                cols_show = [
+                    "Ticker","Tipo","Vencimiento","Precio (ASK)",
+                    "Rendimiento (TIR EA)","TNA 30","TEM (implícita)",
+                    "Duration","Modified Duration","Direct Return"
+                ]
+                cols_show = [c for c in cols_show if c in df_curve.columns]
+                st.dataframe(
+                    df_curve[cols_show].style.format({
+                        "Precio (ASK)": "{:.2f}",
+                        "Rendimiento (TIR EA)": "{:.2f}",
+                        "TNA 30": "{:.2f}",
+                        "TEM (implícita)": "{:.2f}",
+                        "Duration": "{:.2f}",
+                        "Modified Duration": "{:.2f}",
+                        "Direct Return": "{:.2f}",
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
 
     else:
         st.title("Otros")
