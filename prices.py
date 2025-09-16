@@ -1408,24 +1408,24 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 # LECAPs / BONCAPs definidos a nivel módulo
 # ------------------------
 
-rows = [
+LECAPS_SPEC = [
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
     ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
-    ("S10N5", "10/11/2025","31/01/2025", 2.2, "Fija"),
-    ("S28N5","28/11/2025","14/2/2025",2.26, "Fija"),
+    ("S10N5","10/11/2025","31/01/2025",2.2,  "Fija"),
+    ("S28N5","28/11/2025","14/2/2025", 2.26, "Fija"),
     ("T15D5","15/12/2025","14/10/2024",3.89, "Fija"),
-    ("S16E6","16/01/2026","18/08/2025",3.6, "Fija"),
-    ("T30E6","30/1/2026","16/12/2024",2.65, "Fija"),
-    ("T13F6","13/2/2026","29/11/2024",2.60, "Fija"),
-    ("S27F6","29/2/2026","29/8/2025",3.95, "Fija"),
-    ("S29Y6","29/5/2026","30/5/2025",2.35, "Fija"),
-    ("T30J6","30/6/2026","17/1/2025",2.15, "Fija"),
-    ("T15E7","15/1/2027","31/1/2025",2.05, "Fija"),
-    ("TTM26","16/3/2026","29/1/2025", 2.225, "Fija"),
-    ("TTJ26","30/6/2026","29/1/2025", 2.19, "Fija"),
+    ("S16E6","16/01/2026","18/08/2025",3.6,  "Fija"),
+    ("T30E6","30/1/2026","16/12/2024", 2.65, "Fija"),
+    ("T13F6","13/2/2026","29/11/2024", 2.60, "Fija"),
+    ("S27F6","29/2/2026","29/8/2025",  3.95, "Fija"),
+    ("S29Y6","29/5/2026","30/5/2025",  2.35, "Fija"),
+    ("T30J6","30/6/2026","17/1/2025",  2.15, "Fija"),
+    ("T15E7","15/1/2027","31/1/2025",  2.05, "Fija"),
+    ("TTM26","16/3/2026","29/1/2025",  2.225,"Fija"),
+    ("TTJ26","30/6/2026","29/1/2025",  2.19, "Fija"),
     ("TTS26","15/9/2026","29/01/2025", 2.17, "Fija"),
-    ("TTD26","15/12/2026","29/01/2025", 2.14, "Fija"),
+    ("TTD26","15/12/2026","29/01/2025",2.14, "Fija"),
 ]
 
 # =========================
@@ -1729,11 +1729,16 @@ def main():
             st.info("No hay bonos para los emisores seleccionados.")
             
     elif page == "Lecaps":
-        st.title("LECAPs / BONCAPs")
-        st.caption("Rendimientos implícitos con precios ASK y métricas clave.")
+        st.title("LECAPs / BONCAPs / TAMAR")
     
-        df_lecaps = build_lecaps_table(rows, df_all)
-        st.dataframe(df_lecaps, width="stretch", hide_index=True)
+        # construye tabla con precios ask desde df_all
+        df_lecaps = build_lecaps_table(LECAPS_SPEC, df_all)
+    
+        st.dataframe(
+            df_lecaps,
+            width="stretch",   # reemplazo de use_container_width=True
+            hide_index=True
+        )
 
     else:
         st.title("Otros")
