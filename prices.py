@@ -583,6 +583,7 @@ class lecaps:
 # ------------------------
 # LECAPs / BONCAPs definidos a nivel módulo
 # ------------------------
+
 LECAPS_ROWS = [
     ("S30S5","30/9/2025","30/9/2024",3.98, "Fija"),
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
@@ -693,52 +694,30 @@ def build_lecaps_metrics(rows: list[tuple], df_all: pd.DataFrame) -> pd.DataFram
     df_out = df_out[cols_order]
     return df_out
 
-def show_lecaps_plotly_table(spec_rows: list, df_all: pd.DataFrame):
-    """
-    Toma la lista spec_rows (lista de tuplas) y df_all con precios.
-    Construye una tabla Plotly con: Vencimiento, Dur, Mod Dur, TIREA, Direct Return, TNA 30, TEM, Precio.
-    """
-    # Usamos tu helper que ya arma métricas base:
-    df = build_lecaps_metrics(spec_rows, df_all)
+def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame, today=None):
+    # Calcular métricas base
+    df = build_lecaps_metrics(spec_rows, df_all, today=today)
 
-    # Agrego Direct Return = (1 + TIREA/100) ** Dur - 1 (en %)
+    # Direct Return = (1 + TIREA/100)^Dur - 1
     if {"TIREA", "Dur"}.issubset(df.columns):
-        df["Direct Return"] = np.where(
-            df["TIREA"].notna() & df["Dur"].notna(),
-            ((1.0 + df["TIREA"] / 100.0) ** df["Dur"] - 1.0) * 100.0,
-            np.nan
-        )
+        df["Direct Return"] = ((1 + df["TIREA"] / 100.0) ** df["Dur"] - 1.0) * 100.0
     else:
         df["Direct Return"] = np.nan
 
-    # Orden y formato de columnas
-    cols = ["Ticker","Vencimiento","Dur","Mod Dur","TIREA","Direct Return","TNA 30","TEM","Precio"]
-    for c in ["Dur","Mod Dur","TIREA","Direct Return","TNA 30","TEM","Precio"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
-
-    # Si Vencimiento lo formateaste en build_lecaps_metrics como dd/mm/yy, lo dejamos así
+    # Reordenar columnas (según lo que pediste)
+    cols = [
+        "Ticker", "Tipo", "Vencimiento",
+        "Precio", "TIREA", "TNA 30", "TEM",
+        "Dur", "Mod Dur", "Convexidad", "Direct Return"
+    ]
     df_show = df[[c for c in cols if c in df.columns]].copy()
 
-    # Construyo la tabla
-    fig = go.Figure(
-        data=[go.Table(
-            header=dict(
-                values=[c for c in df_show.columns],
-                fill_color="#1f77b4",
-                font=dict(color="white", size=12),
-                align="center"
-            ),
-            cells=dict(
-                values=[df_show[c] for c in df_show.columns],
-                fill_color="#f7f7f7",
-                align="center"
-            )
-        )]
-    )
-    fig.update_layout(margin=dict(l=0, r=0, t=10, b=0))
-    return fig
+    # Redondeo
+    for c in ["Precio","TIREA","TNA 30","TEM","Dur","Mod Dur","Convexidad","Direct Return"]:
+        if c in df_show.columns:
+            df_show[c] = pd.to_numeric(df_show[c], errors="coerce").round(2)
 
+    return df_show
 
 # =========================
 # Helpers de parsing Excel
@@ -1765,11 +1744,15 @@ def main():
             
     elif page == "Lecaps":
         st.title("LECAPs / BONCAPs")
-        st.caption("Rendimientos implícitos con precios ASK (data912) y métricas clave.")
+        st.caption("Rendimientos implícitos con precios ASK y métricas clave.")
     
-        # Usar SIEMPRE la constante global (no declares una variable local llamada 'rows')
-        fig_lecaps = show_lecaps_plotly_table(LECAPS_ROWS, df_all)
-        st.plotly_chart(fig_lecaps, width="stretch")
+        df_lecaps = build_lecaps_table(LECAPS_ROWS, df_all)
+    
+        st.dataframe(
+            df_lecaps,
+            width="stretch",
+            hide_index=True
+        )
 
     else:
         st.title("Otros")
