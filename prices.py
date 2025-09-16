@@ -1957,7 +1957,6 @@ def main():
             value=mep_default, 
             key="mep_rate_input"
         )
-        mep_rate = st.number_input("MEP actual (ARS por USD)", min_value=0.0, step=1.0, value=float(mep_rate), key="mep_rate_input")
     
         # Selección de tickers a mostrar
         tickers_fx = sorted(le_map.keys()) if le_map else []
