@@ -1938,17 +1938,25 @@ def main():
         st.divider()
         st.subheader("TC implícito al vencimiento (MEP→LECAP/BONCAP) con bandas")
     
-        # Intento obtener un valor por defecto de MEP; si no, que el usuario lo ingrese
-        def guess_mep_rate(df_mep):
-            # Intentos suaves para columnas típicas
-            for col in ["mep", "MEP", "px", "seller", "venta", "px_ask", "px_bid", "price"]:
-                if col in df_mep.columns:
-                    s = pd.to_numeric(df_mep[col], errors="coerce").dropna()
-                    if not s.empty and s.mean() > 100:  # un TC razonable
-                        return float(round(s.mean(), 2))
-            return 1000.0  # fallback conservador
-    
-        default_mep = guess_mep_rate(df_mep) if isinstance(df_mep, pd.DataFrame) and not df_mep.empty else 1000.0
+        # Intento obtener un valor por defecto de MEP a partir de AL30
+        try:
+            if isinstance(df_mep, pd.DataFrame) and not df_mep.empty:
+                mep_default = float(
+                    df_mep.loc[df_mep["ticker"].str.upper() == "AL30", "close"].iloc[0]
+                )
+            else:
+                mep_default = 1000.0
+        except Exception:
+            mep_default = 1000.0
+
+        # El usuario lo puede modificar
+        mep_rate = st.number_input(
+            "MEP actual (ARS por USD)", 
+            min_value=0.0, 
+            step=1.0, 
+            value=mep_default, 
+            key="mep_rate_input"
+        )
         mep_rate = st.number_input("MEP actual (ARS por USD)", min_value=0.0, step=1.0, value=float(default_mep), key="mep_rate_input")
     
         # Selección de tickers a mostrar
