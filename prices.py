@@ -1610,28 +1610,28 @@ def main():
         # 3) Calculadora de Métricas
         # =========================
         def compute_metrics_with_price(b: bond_calculator_pro, price_override: float | None = None, settlement=None) -> dict:
-            # Clonado liviano con override de precio
-            old_price = b.price
-            try:
-                if price_override is not None and price_override > 0:
-                    b.price = float(price_override)
-                row = {
-                    "Ticker": b.name,
-                    "Precio": round(b.price, 1),
-                    "TIR": b.xirr(settlement),
-                    "TNA SA": b.tna_180(settlement),
-                    "Duration": b.duration(settlement),
-                    "Modified Duration": b.modified_duration(settlement),
-                    "Convexidad": b.convexity(settlement),
-                    "Paridad": b.parity(settlement),
-                    "Current Yield": b.current_yield(settlement),
-                }
-                # redondeo a 1 decimal
-                for k in ("TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"):
-                    row[k] = round(pd.to_numeric(row[k], errors="coerce"), 1)
-                return row
-            finally:
-                b.price = old_price
+            # 1) crear un clon con el precio pedido
+            price = float(price_override) if price_override and price_override > 0 else b.price
+            bb = clone_with_price(b, price)
+        
+            # 2) (opcional) invalidar cachés internos si existen
+            if hasattr(bb, "_yield_cache"): bb._yield_cache.clear()
+            if hasattr(bb, "_duration_cache"): bb._duration_cache.clear()
+        
+            row = {
+                "Ticker": bb.name,
+                "Precio": round(bb.price, 1),
+                "TIR": bb.xirr(settlement),
+                "TNA SA": bb.tna_180(settlement),
+                "Duration": bb.duration(settlement),
+                "Modified Duration": bb.modified_duration(settlement),
+                "Convexidad": bb.convexity(settlement),
+                "Paridad": bb.parity(settlement),
+                "Current Yield": bb.current_yield(settlement),
+            }
+            for k in ("TIR","TNA SA","Duration","Modified Duration","Convexidad","Paridad","Current Yield"):
+                row[k] = round(pd.to_numeric(row[k], errors="coerce"), 1)
+            return row
 
         st.subheader("Comparador de Métricas (3 bonos)")
         col1, col2, col3 = st.columns(3)
