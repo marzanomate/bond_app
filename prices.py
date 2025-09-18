@@ -2022,7 +2022,7 @@ def main():
         if df_lecaps.empty:
             st.info("No hay datos de LECAPs/BONCAPs para graficar.")
         else:
-            excl = {"TTM26", "TTJ26", "TTS26", "TTD26"}
+            excl = {"TTM26","TTJ26","TTS26","TTD26","TY30P","TO26"}
             df_curve = df_lecaps.copy()
             df_curve = df_curve[~df_curve["Ticker"].isin(excl)].copy()
 
@@ -2136,7 +2136,12 @@ def main():
         )
     
         # Selección de tickers a mostrar
-        tickers_fx = sorted(le_map.keys()) if le_map else []
+        # --- TC implícito MEP→LECAP/BONCAP (excluyendo algunos tickers) ---
+        
+        # Universo filtrado (sin excluidos)
+        tickers_fx_all = sorted(le_map.keys()) if le_map else []
+        tickers_fx = [t for t in tickers_fx_all if t not in excl]
+
         sel_fx = st.multiselect("Elegí LECAPs/BONCAPs para el gráfico de TC implícito", tickers_fx, default=tickers_fx)
     
         if not le_map or not sel_fx:
