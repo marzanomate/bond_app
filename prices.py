@@ -16,9 +16,12 @@ from requests.adapters import HTTPAdapter, Retry
 import certifi
 from requests.exceptions import SSLError
 import urllib3
+from zoneinfo import ZoneInfo
 from urllib3.exceptions import InsecureRequestWarning
 from requests.exceptions import HTTPError, RequestException, ConnectTimeout, ReadTimeout
 import os
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =========================
 # Config Streamlit
@@ -3341,7 +3344,7 @@ def main():
     # Sección: Otros
     # =========================
     elif page == "Otros":
-        st.title("Otros: CER / TAMAR / DLK")
+        st.title("CER / TAMAR / DLK")
     
         # ---------- Datos base ----------
         df_all_norm = normalize_market_df(df_all)
@@ -3360,7 +3363,7 @@ def main():
             df_of = fetch_oficial_df(5)
             t_minus_1 = (datetime.today() - timedelta(days=1)).date()
             oficial_t1 = float(df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"].iloc[-1])
-            st.caption(f"Tipo de cambio oficial (BCRA, serie 5) t-1: {oficial_t1:,.2f}")
+            st.caption(f"Tipo de cambio oficial (BCRA) para la valuación de los DLK: {oficial_t1:,.2f}")
         except Exception as e:
             st.warning(f"No se pudo leer Oficial (serie 5) t-1. Detalle: {e}")
             oficial_t1 = np.nan
