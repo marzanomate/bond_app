@@ -742,6 +742,135 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
         return _pick(row.iloc[0])
     raise KeyError(f"Price not found for {name} (or {name}D)")
 
+# =========================
+# Carga de ONs desde Excel
+# =========================
+
+@st.cache_resource(show_spinner=False)
+def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer: str = "px_bid") -> list:
+    url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
+    try:
+        r = requests.get(url_excel_raw, timeout=25)
+        r.raise_for_status()
+        content = r.content
+    except Exception as e:
+        raise RuntimeError(f"No se pudo descargar el Excel de ONs: {e}")
+
+    # sanity-check: archivos .xlsx son ZIP y empiezan con 'PK'
+    if not content.startswith(b"PK"):
+        raise RuntimeError("El contenido descargado no parece un .xlsx (posible rate-limit de GitHub o URL incorrecta).")
+
+    try:
+        raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
+    except Exception as e:
+        raise RuntimeError(f"No se pudo abrir el Excel de ONs: {e}")
+
+    required = [
+        "name","empresa","curr","law","start_date","end_date",
+        "payment_frequency","amortization_dates","amortizations",
+        "rate","outstanding","calificación"
+    ]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        raise ValueError(f"Missing columns in Excel: {missing}")
+
+    out = []
+    for _, r in raw.iterrows():
+        name  = str(r["name"]).strip()
+        emisor = str(r["empresa"]).strip()
+        curr  = str(r["curr"]).strip()
+        law   = str(r["law"]).strip()
+        start = parse_date_cell(r["start_date"])
+        end   = parse_date_cell(r["end_date"])
+
+        pay_freq_raw = parse_float_cell(r["payment_frequency"])
+        if pd.isna(pay_freq_raw) or pay_freq_raw <= 0:
+            continue
+        pay_freq = int(round(pay_freq_raw))
+
+        am_dates = parse_date_list(r["amortization_dates"])
+        am_amts  = [parse_float_cell(x) for x in str(r["amortizations"]).split(";")] if str(r["amortizations"]).strip() != "" else []
+        if len(am_dates) != len(am_amts):
+            if len(am_dates) == 1 and len(am_amts) == 0:
+                am_amts = [100.0]
+            elif len(am_dates) == 0 and len(am_amts) == 1:
+                am_dates = [end.strftime("%Y-%m-%d")]
+            else:
+                continue
+
+        rate_pct = normalize_rate_to_percent(parse_float_cell(r["rate"]))
+        try:
+            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer) * adj
+        except Exception:
+            price    = np.nan
+        outstanding = parse_float_cell(r["outstanding"])
+        calif = str(r["calificación"]).strip()
+
+        b = bond_calculator_pro(
+            name=name, emisor=emisor, curr=curr, law=law,
+            start_date=start, end_date=end, payment_frequency=pay_freq,
+            amortization_dates=am_dates, amortizations=am_amts,
+            rate=rate_pct, price=price,
+            step_up_dates=[], step_up=[],
+            outstanding=outstanding, calificacion=calif
+        )
+        out.append(b)
+    return out
+
+# =========================
+# Tabla de métricas
+# =========================
+
+def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame:
+    rows = []
+    stl = settlement
+    for b in bonds:
+        try:
+            dates = b.generate_payment_dates(stl)
+            prox = dates[1] if len(dates) > 1 else None
+            rows.append({
+                "Ticker": b.name,
+                "Emisor": b.emisor,
+                "Ley": b.law,
+                "Moneda de Pago": b.curr,
+                "Precio": round(b.price, 1),
+                "TIR": b.xirr(stl),
+                "TNA SA": b.tna_180(stl),
+                "Modified Duration": b.modified_duration(stl),
+                "Duration": b.duration(stl),
+                "Convexidad": b.convexity(stl),
+                "Paridad": b.parity(stl),
+                "Current Yield": b.current_yield(stl),   # <-- NUEVO
+                "Calificación": b.calificacion,
+                "Próxima Fecha de Pago": prox,
+                "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d"),
+            })
+        except Exception as e:
+            rows.append({
+                "Ticker": getattr(b, "name", np.nan),
+                "Emisor": getattr(b, "emisor", np.nan),
+                "Ley": getattr(b, "law", np.nan),
+                "Moneda de Pago": getattr(b, "curr", np.nan),
+                "Precio": round(getattr(b, "price", np.nan), 1) if hasattr(b, "price") else np.nan,
+                "TIR": np.nan, "TNA SA": np.nan, "Modified Duration": np.nan,
+                "Duration": np.nan, "Convexidad": np.nan, "Paridad": np.nan,
+                "Current Yield": np.nan,                  # <-- NUEVO
+                "Calificación": getattr(b, "calificacion", np.nan),
+                "Próxima Fecha de Pago": None,
+                "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d") if hasattr(b, "end_date") else None,
+            })
+            print(f"⚠️ {getattr(b, 'name', '?')}: {e}")
+
+    df = pd.DataFrame(rows)
+
+    # formateo numérico a 1 decimal
+    for c in ["TIR","TNA SA","Paridad","Current Yield"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
+    for c in ["Duration","Modified Duration","Convexidad","Precio"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
+
+    return df.reset_index(drop=True)
+
 # ----------------------------------------------------------------
 # Construyo enviroment para LECAPs/Boncaps
 # ----------------------------------------------------------------
@@ -936,145 +1065,6 @@ def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
     return df
-
-# =========================
-# Carga de ONs desde Excel
-# =========================
-
-@st.cache_resource(show_spinner=False)
-def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer: str = "px_bid") -> list:
-    url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
-    try:
-        r = requests.get(url_excel_raw, timeout=25)
-        r.raise_for_status()
-        content = r.content
-    except Exception as e:
-        raise RuntimeError(f"No se pudo descargar el Excel de ONs: {e}")
-
-    # sanity-check: archivos .xlsx son ZIP y empiezan con 'PK'
-    if not content.startswith(b"PK"):
-        raise RuntimeError("El contenido descargado no parece un .xlsx (posible rate-limit de GitHub o URL incorrecta).")
-
-    try:
-        raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
-    except Exception as e:
-        raise RuntimeError(f"No se pudo abrir el Excel de ONs: {e}")
-
-    required = [
-        "name","empresa","curr","law","start_date","end_date",
-        "payment_frequency","amortization_dates","amortizations",
-        "rate","outstanding","calificación"
-    ]
-    missing = [c for c in required if c not in raw.columns]
-    if missing:
-        raise ValueError(f"Missing columns in Excel: {missing}")
-
-    out = []
-    for _, r in raw.iterrows():
-        name  = str(r["name"]).strip()
-        emisor = str(r["empresa"]).strip()
-        curr  = str(r["curr"]).strip()
-        law   = str(r["law"]).strip()
-        start = parse_date_cell(r["start_date"])
-        end   = parse_date_cell(r["end_date"])
-
-        pay_freq_raw = parse_float_cell(r["payment_frequency"])
-        if pd.isna(pay_freq_raw) or pay_freq_raw <= 0:
-            continue
-        pay_freq = int(round(pay_freq_raw))
-
-        am_dates = parse_date_list(r["amortization_dates"])
-        am_amts  = [parse_float_cell(x) for x in str(r["amortizations"]).split(";")] if str(r["amortizations"]).strip() != "" else []
-        if len(am_dates) != len(am_amts):
-            if len(am_dates) == 1 and len(am_amts) == 0:
-                am_amts = [100.0]
-            elif len(am_dates) == 0 and len(am_amts) == 1:
-                am_dates = [end.strftime("%Y-%m-%d")]
-            else:
-                continue
-
-        rate_pct = normalize_rate_to_percent(parse_float_cell(r["rate"]))
-        try:
-            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer) * adj
-        except Exception:
-            price    = np.nan
-        outstanding = parse_float_cell(r["outstanding"])
-        calif = str(r["calificación"]).strip()
-
-        b = bond_calculator_pro(
-            name=name, emisor=emisor, curr=curr, law=law,
-            start_date=start, end_date=end, payment_frequency=pay_freq,
-            amortization_dates=am_dates, amortizations=am_amts,
-            rate=rate_pct, price=price,
-            step_up_dates=[], step_up=[],
-            outstanding=outstanding, calificacion=calif
-        )
-        out.append(b)
-    return out
-
-# =========================
-# Tabla de métricas
-# =========================
-
-def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame:
-    rows = []
-    stl = settlement
-    for b in bonds:
-        try:
-            dates = b.generate_payment_dates(stl)
-            prox = dates[1] if len(dates) > 1 else None
-            rows.append({
-                "Ticker": b.name,
-                "Emisor": b.emisor,
-                "Ley": b.law,
-                "Moneda de Pago": b.curr,
-                "Precio": round(b.price, 1),
-                "TIR": b.xirr(stl),
-                "TNA SA": b.tna_180(stl),
-                "Modified Duration": b.modified_duration(stl),
-                "Duration": b.duration(stl),
-                "Convexidad": b.convexity(stl),
-                "Paridad": b.parity(stl),
-                "Current Yield": b.current_yield(stl),   # <-- NUEVO
-                "Calificación": b.calificacion,
-                "Próxima Fecha de Pago": prox,
-                "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d"),
-            })
-        except Exception as e:
-            rows.append({
-                "Ticker": getattr(b, "name", np.nan),
-                "Emisor": getattr(b, "emisor", np.nan),
-                "Ley": getattr(b, "law", np.nan),
-                "Moneda de Pago": getattr(b, "curr", np.nan),
-                "Precio": round(getattr(b, "price", np.nan), 1) if hasattr(b, "price") else np.nan,
-                "TIR": np.nan, "TNA SA": np.nan, "Modified Duration": np.nan,
-                "Duration": np.nan, "Convexidad": np.nan, "Paridad": np.nan,
-                "Current Yield": np.nan,                  # <-- NUEVO
-                "Calificación": getattr(b, "calificacion", np.nan),
-                "Próxima Fecha de Pago": None,
-                "Fecha de Vencimiento": b.end_date.strftime("%Y-%m-%d") if hasattr(b, "end_date") else None,
-            })
-            print(f"⚠️ {getattr(b, 'name', '?')}: {e}")
-
-    df = pd.DataFrame(rows)
-
-    # formateo numérico a 1 decimal
-    for c in ["TIR","TNA SA","Paridad","Current Yield"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
-    for c in ["Duration","Modified Duration","Convexidad","Precio"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
-
-    return df.reset_index(drop=True)
-
-def center_table(df: pd.DataFrame) -> str:
-    # Render simple con HTML centrado y 1 decimal
-    fmt = {c: "{:,.1f}".format for c in df.select_dtypes(include=[np.number]).columns}
-    styled = df.style.format(fmt).hide(axis="index")
-    html = styled.to_html()
-    html = html.replace('<table', '<table style="margin-left:auto;margin-right:auto;text-align:center;"')
-    html = html.replace('<th ', '<th style="text-align:center;" ')
-    html = html.replace('<td ', '<td style="text-align:center;" ')
-    return html
 
 # =========================
 # Manual: lista de soberanos
@@ -1363,6 +1353,7 @@ def manual_bonds_factory(df_all):
 # =========================
 # Simulador de flujos
 # =========================
+
 def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.DataFrame:
     rows = []
     for b in selected_bonds:
@@ -1449,8 +1440,9 @@ LECAPS_ROWS = [
 ]
 
 # -------------------------------------------------
-# ===== 1) Fetch robusto con cache =====
+# Traigo el CER
 # -------------------------------------------------
+# ===== 1) Fetch robusto con cache =====
 
 @st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
 def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
@@ -1647,7 +1639,7 @@ def main():
                 "Paridad": "{:.1f}",
                 "Current Yield": "{:.1f}",
             }),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
         
@@ -1693,7 +1685,7 @@ def main():
             st.markdown("**Flujo consolidado por fecha (USD):**")
             st.dataframe(
                 df_cf,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config={
                     "Cupón":  st.column_config.NumberColumn(format="%.2f"),
@@ -1770,7 +1762,7 @@ def main():
                         "Paridad": "{:.1f}",
                         "Current Yield": "{:.1f}",
                     }),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True
                 )
             else:
@@ -1838,7 +1830,7 @@ def main():
                 height=480,
                 margin=dict(l=10, r=10, t=10, b=10),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
             # Tabla debajo (1 decimal, sin índice)
             st.markdown("**Bonos incluidos en las curvas:**")
@@ -1858,7 +1850,7 @@ def main():
                     "Paridad": "{:.1f}",
                     "Current Yield": "{:.1f}",
                 }),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True
             )
         else:
@@ -1872,7 +1864,7 @@ def main():
         df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
     
         st.subheader("Métricas de LECAPs/BONCAPs")
-        st.dataframe(df_lecaps, use_container_width=True, hide_index=True)
+        st.dataframe(df_lecaps, width='stretch', hide_index=True)
     
         # ---------- Objetos para cálculos (solo LECAPs) ----------
         le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm)
@@ -1918,7 +1910,7 @@ def main():
                         df_one["Precio"] = df_one["Precio"].round(2)
                         for c in ["TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
                             df_one[c] = df_one[c].round(2)
-                        st.dataframe(df_one, use_container_width=True, hide_index=True)
+                        st.dataframe(df_one, width='stretch', hide_index=True)
     
         with tab_yld:
             if not le_map:
@@ -2032,7 +2024,7 @@ def main():
                         )
                     ],
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
     
         # ---------- TC implícito MEP->LECAP/BONCAP + Bandas ----------
         st.divider()
@@ -2153,7 +2145,7 @@ def main():
                     height=480,
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
-                st.plotly_chart(fig_fx, use_container_width=True)
+                st.plotly_chart(fig_fx, width='stretch')
  
     else:
         # ===== 3) UI Streamlit =====
@@ -2174,7 +2166,7 @@ def main():
             st.error(f"No se pudo calcular CER a t-{lag} hábiles: {e}")
         
         # Muestra rápida del DF
-        st.dataframe(df_cer.tail(20), use_container_width=True)
+        st.dataframe(df_cer.tail(20), width='stretch')
         
         # Descarga opcional
         st.download_button(
