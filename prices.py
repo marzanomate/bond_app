@@ -2357,13 +2357,15 @@ def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
         r = session.get(url, timeout=20, headers=headers)
         r.raise_for_status()
     except SSLError as e:
-        # ⚠️ Último recurso: sin verificación SSL
-        try:
-            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
-        except Exception:
-            pass
+        if not st.session_state.get("bcra_ssl_warned", False):
+            st.session_state["bcra_ssl_warned"] = True
+            st.warning(
+                f"Problema de certificado SSL ({e}). Reintentando sin verificación…"
+            )
+        # fallback inseguro
         r = session.get(url, timeout=20, headers=headers, verify=False)
         r.raise_for_status()
+
 
     js = r.json()
     if "results" not in js or not js["results"]:
