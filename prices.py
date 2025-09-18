@@ -1454,6 +1454,10 @@ LECAPS_ROWS = [
 
 @st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
 def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
+    import certifi
+    from requests.adapters import HTTPAdapter, Retry
+    from requests.exceptions import SSLError
+
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
     url = f"{base}/{version}/monetarias/{series_id}"
@@ -1467,16 +1471,27 @@ def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
     )
     session.mount("https://", HTTPAdapter(max_retries=retries))
 
-    r = session.get(
-        url,
-        timeout=20,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"
-        },
-    )
-    r.raise_for_status()
-    js = r.json()
+    # 🔒 usar bundle de certificados confiables
+    session.verify = certifi.where()
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"
+    }
+
+    try:
+        r = session.get(url, timeout=20, headers=headers)
+        r.raise_for_status()
+        js = r.json()
+    except SSLError as e:
+        # ⚠️ fallback inseguro: solo si la validación SSL falla
+        try:
+            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+        except Exception:
+            pass  # por si no estás en Streamlit en este contexto
+        r = session.get(url, timeout=20, headers=headers, verify=False)
+        r.raise_for_status()
+        js = r.json()
 
     # Validación básica del schema
     if "results" not in js or not js["results"]:
@@ -1485,7 +1500,6 @@ def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
         raise ValueError("No se encontró 'detalle' en results[0].")
 
     df = pd.DataFrame(js["results"][0]["detalle"])
-    # Nos quedamos con fecha/valor y tipamos
     df = (
         df[["fecha", "valor"]]
         .assign(
