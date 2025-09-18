@@ -2037,35 +2037,35 @@ def main():
                                     df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
                                 st.dataframe(df_one, width='stretch', hide_index=True)
         
-            with tab_yld:
-                if not le_map and not bcp_map:
-                    st.info("No se pudieron construir instrumentos. Verificá precios de mercado.")
-                else:
-                    tickers2_any = sorted(list(le_map.keys()) + list(bcp_map.keys()))
-                    bname2 = st.selectbox("Elegí instrumento", tickers2_any, key="any_y2px")
-                    yld_in = st.number_input(
-                        "TIR e.a. (%) → Precio (clean)", min_value=-99.0, step=0.1, value=0.0, key="any_y"
-                    )
-        
-                    if st.button("Calcular Precio", key="btn_any_y2px"):
-                        if bname2 in bcp_map:
-                            b2 = bcp_map[bname2]
-                            p = b2.price_from_irr(yld_in)
-                            if np.isnan(p):
-                                st.error("No se pudo calcular el precio con esa TIR.")
-                            else:
-                                st.success(f"Precio clean: **{p:.2f}**")
-                                tir_check = b2.yield_from_price(p)
-                                st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
+        with tab_yld:
+            if not le_map and not bcp_map:
+                st.info("No se pudieron construir instrumentos. Verificá precios de mercado.")
+            else:
+                tickers2_any = sorted(list(le_map.keys()) + list(bcp_map.keys()))
+                bname2 = st.selectbox("Elegí instrumento", tickers2_any, key="any_y2px")
+                yld_in = st.number_input(
+                    "TIR e.a. (%) → Precio (clean)", min_value=-99.0, step=0.1, value=0.0, key="any_y"
+                )
+    
+                if st.button("Calcular Precio", key="btn_any_y2px"):
+                    if bname2 in bcp_map:
+                        b2 = bcp_map[bname2]
+                        p = b2.price_from_irr(yld_in)
+                        if np.isnan(p):
+                            st.error("No se pudo calcular el precio con esa TIR.")
                         else:
-                            b2 = le_map[bname2]
-                            p = b2.price_from_irr(yld_in)
-                            if np.isnan(p):
-                                st.error("No se pudo calcular el precio con esa TIR.")
-                            else:
-                                st.success(f"Precio clean: **{p:.2f}**")
-                                tir_check = b2.yield_from_price(p)
-                                st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
+                            st.success(f"Precio clean: **{p:.2f}**")
+                            tir_check = b2.yield_from_price(p)
+                            st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
+                    else:
+                        b2 = le_map[bname2]
+                        p = b2.price_from_irr(yld_in)
+                        if np.isnan(p):
+                            st.error("No se pudo calcular el precio con esa TIR.")
+                        else:
+                            st.success(f"Precio clean: **{p:.2f}**")
+                            tir_check = b2.yield_from_price(p)
+                            st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
             
         # ---------- Curva excluyendo TTM, TTJ, TTS, TTD ----------
         st.divider()
