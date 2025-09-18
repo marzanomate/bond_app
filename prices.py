@@ -1954,6 +1954,7 @@ def main():
         st.dataframe(df_lecaps, width='stretch', hide_index=True)
     
         # ---------- Objetos para cálculos (solo LECAPs) ----------
+        bcp_map = {k: v for k, v in {"TY30P": ty30p, "TO26": to26}.items() if np.isfinite(v.price)}
         le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm)
     
         st.divider()
