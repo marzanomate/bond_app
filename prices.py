@@ -1951,7 +1951,7 @@ def main():
         # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
         df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
-        df_extra_bonos = build_extra_ars_bonds_for_lecaps(df_all_norm)
+        df_extra_bonos, bcp_map = build_extra_ars_bonds_for_lecaps(df_all_norm)
         df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
         st.subheader("Métricas de LECAPs/BONCAPs")
