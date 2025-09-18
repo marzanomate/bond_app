@@ -21,7 +21,7 @@ from urllib3.exceptions import InsecureRequestWarning
 from requests.exceptions import HTTPError, RequestException, ConnectTimeout, ReadTimeout
 import os
 
-
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =========================
 # Config Streamlit
@@ -33,7 +33,6 @@ st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
 # Traigo el CER
 # -------------------------------------------------
 # ===== 1) Fetch robusto con cache =====
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 @st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
 def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
@@ -67,7 +66,7 @@ def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
     except SSLError as e:
         # ⚠️ fallback inseguro: solo si la validación SSL falla
         try:
-            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+            
         except Exception:
             pass  # por si no estás en Streamlit en este contexto
         r = session.get(url, timeout=20, headers=headers, verify=False)
