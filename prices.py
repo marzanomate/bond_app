@@ -1447,6 +1447,90 @@ LECAPS_ROWS = [
     ("TTD26","15/12/2026","29/01/2025",2.14, "Fija"),
 ]
 
+# -------------------------------------------------
+# ===== 1) Fetch robusto con cache =====
+# -------------------------------------------------
+
+@st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
+def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
+    base = "https://api.bcra.gob.ar/estadisticas"
+    version = "v4.0"
+    url = f"{base}/{version}/monetarias/{series_id}"
+
+    session = requests.Session()
+    retries = Retry(
+        total=5,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"])
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
+    r = session.get(
+        url,
+        timeout=20,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"
+        },
+    )
+    r.raise_for_status()
+    js = r.json()
+
+    # Validación básica del schema
+    if "results" not in js or not js["results"]:
+        raise ValueError("Respuesta sin 'results' o vacía del BCRA.")
+    if "detalle" not in js["results"][0]:
+        raise ValueError("No se encontró 'detalle' en results[0].")
+
+    df = pd.DataFrame(js["results"][0]["detalle"])
+    # Nos quedamos con fecha/valor y tipamos
+    df = (
+        df[["fecha", "valor"]]
+        .assign(
+            fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"),
+            valor=lambda d: pd.to_numeric(d["valor"], errors="coerce"),
+        )
+        .dropna(subset=["fecha", "valor"])
+        .sort_values("fecha")
+        .reset_index(drop=True)
+    )
+    return df
+
+# ===== 2) Días hábiles: usa QuantLib si está disponible; si no, fallback Mon–Fri =====
+def last_business_day_arg(lag_business_days: int = 10) -> date:
+    # Intento con QuantLib (calendario Argentina Merval)
+    try:
+        import QuantLib as ql
+        cal = ql.Argentina(ql.Argentina.Merval)
+
+        qd = ql.Date.todaysDate() + 1  # asumiendo liquidación T+1
+        # retrocedo 'lag_business_days' días hábiles
+        count = 0
+        while count < lag_business_days:
+            qd = qd - 1
+            if cal.isBusinessDay(qd):
+                count += 1
+        return date(qd.year(), qd.month(), qd.dayOfMonth())
+
+    except Exception:
+        # Fallback simple: cuenta solo Mon–Fri (sin feriados)
+        # Si te interesa feriados reales sin QuantLib, considera 'workalendar'
+        d = datetime.utcnow().date() + timedelta(days=1)
+        count = 0
+        while count < lag_business_days:
+            d = d - timedelta(days=1)
+            if d.weekday() < 5:  # 0=Mon ... 4=Fri
+                count += 1
+        return d
+
+def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
+    # Filtra hasta target (incluye ese día)
+    sel = df[df["fecha"].dt.date <= target_day]
+    if sel.empty:
+        raise ValueError("No hay datos de CER previos a la fecha objetivo.")
+    return float(sel.iloc[-1]["valor"])
+
 # =========================
 # App UI
 # =========================
@@ -2057,8 +2141,33 @@ def main():
                 st.plotly_chart(fig_fx, use_container_width=True)
  
     else:
-        st.title("Otros")
-        st.info("Sección en construcción para otros instrumentos y herramientas.")
+        # ===== 3) UI Streamlit =====
+        st.title("CER (BCRA) con t - 10 días hábiles")
+        
+        with st.status("Consultando API del BCRA…", expanded=False):
+            df_cer = fetch_cer_df(30)
+        
+        st.success(f"Datos CER cargados. Última fecha disponible: {df_cer['fecha'].max().date()}")
+        
+        lag = st.number_input("Días hábiles hacia atrás", min_value=1, max_value=60, value=10, step=1)
+        target = last_business_day_arg(int(lag))
+        
+        try:
+            cer_final = cer_at_or_before(df_cer, target)
+            st.metric(label=f"CER a t-{lag} hábiles (target: {target})", value=f"{cer_final:,.2f}")
+        except Exception as e:
+            st.error(f"No se pudo calcular CER a t-{lag} hábiles: {e}")
+        
+        # Muestra rápida del DF
+        st.dataframe(df_cer.tail(20), use_container_width=True)
+        
+        # Descarga opcional
+        st.download_button(
+            "Descargar CER (CSV)",
+            data=df_cer.to_csv(index=False).encode("utf-8"),
+            file_name="cer_bcra.csv",
+            mime="text/csv",
+        )
 
 
 if __name__ == "__main__":
