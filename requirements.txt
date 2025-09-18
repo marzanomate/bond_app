@@ -8,3 +8,5 @@ xlsxwriter>=3.2
 plotly
 Quantlib
 scipy
+urllib3>=2.2
+workalendar==17.0.0
