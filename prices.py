@@ -1066,6 +1066,89 @@ def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
     return df
 
+def _tna30_tem_from_irr_ea(irr_pct: float):
+    """Convierte TIR EA (%) → TNA30 (%) y TEM (%) usando 30/365."""
+    irr = float(irr_pct or 0.0) / 100.0
+    tem = (1.0 + irr) ** (30.0 / 365.0) - 1.0
+    return round(tem * 12.0 * 100.0, 2), round(tem * 100.0, 2)  # (TNA30, TEM)
+
+# ----------------------------------------------------------------------------
+#  Agrego TO26/BONTE
+# ----------------------------------------------------------------------------
+
+def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
+    """
+    Crea TY30P y TO26 usando bond_calculator_pro y devuelve un DF
+    con el MISMO esquema que usa la tabla de LECAPs:
+    ['Ticker','Tipo','Vencimiento','Precio','Rendimiento (TIR EA)',
+     'Retorno Directo','TNA 30','TEM','Duration','Modified Duration']
+    """
+    import numpy as np
+
+    def px(sym: str) -> float:
+        try:
+            return float(get_price_for_symbol(df_all_norm, sym, prefer="px_ask"))
+        except Exception:
+            return np.nan
+
+    # --- Instancias con bond_calculator_pro (sin step-ups) ---
+    ty30p = bond_calculator_pro(
+        name="TY30P", emisor="Soberano", curr="ARS", law="US",
+        start_date=datetime(2025, 11, 30), end_date=datetime(2030, 5, 30),
+        payment_frequency=6,
+        amortization_dates=["2030-05-30"], amortizations=[100],
+        rate=29.5, price=px("TY30P"),
+        step_up_dates=[], step_up=[],
+        outstanding=0.0, calificacion="-"
+    )
+
+    to26 = bond_calculator_pro(
+        name="TO26", emisor="Soberano", curr="ARS", law="US",
+        start_date=datetime(2016, 10, 17), end_date=datetime(2026, 10, 17),
+        payment_frequency=6,
+        amortization_dates=["2026-10-17"], amortizations=[100],
+        rate=15.5, price=px("TO26"),
+        step_up_dates=[], step_up=[],
+        outstanding=0.0, calificacion="-"
+    )
+
+    extras = []
+    for b in [ty30p, to26]:
+        try:
+            irr_pct = float(b.xirr())                  # TIR EA en %
+            dur     = float(b.duration())              # años
+            mdur    = float(b.modified_duration())
+            tna30, tem = _tna30_tem_from_irr_ea(irr_pct)
+            # Retorno Directo ≈ (1+irr)^Dur - 1
+            irr_dec = irr_pct / 100.0 if np.isfinite(irr_pct) else np.nan
+            direct  = ((1.0 + irr_dec) ** dur - 1.0) * 100.0 if np.isfinite(dur) else np.nan
+
+            extras.append({
+                "Ticker": b.name,
+                "Tipo": "Bono Fijo",                                  # etiqueta para la leyenda
+                "Vencimiento": b.end_date.strftime("%d/%m/%Y"),
+                "Precio": round(b.price, 2) if np.isfinite(b.price) else np.nan,
+                "Rendimiento (TIR EA)": round(irr_pct, 2) if np.isfinite(irr_pct) else np.nan,
+                "Retorno Directo": round(direct, 2) if np.isfinite(direct) else np.nan,
+                "TNA 30": tna30,
+                "TEM": tem,
+                "Duration": round(dur, 2) if np.isfinite(dur) else np.nan,
+                "Modified Duration": round(mdur, 2) if np.isfinite(mdur) else np.nan,
+            })
+        except Exception:
+            extras.append({
+                "Ticker": b.name, "Tipo": "Bono Fijo",
+                "Vencimiento": b.end_date.strftime("%d/%m/%Y"),
+                "Precio": np.nan, "Rendimiento (TIR EA)": np.nan, "Retorno Directo": np.nan,
+                "TNA 30": np.nan, "TEM": np.nan, "Duration": np.nan, "Modified Duration": np.nan
+            })
+
+    return pd.DataFrame(extras, columns=[
+        "Ticker","Tipo","Vencimiento","Precio",
+        "Rendimiento (TIR EA)","Retorno Directo","TNA 30","TEM",
+        "Duration","Modified Duration"
+    ])
+
 # =========================
 # Manual: lista de soberanos
 # =========================
@@ -1862,6 +1945,8 @@ def main():
         # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
         df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
+        df_extra_bonos = build_extra_ars_bonds_for_lecaps(df_all_norm)
+        df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
         st.subheader("Métricas de LECAPs/BONCAPs")
         st.dataframe(df_lecaps, width='stretch', hide_index=True)
@@ -2146,7 +2231,7 @@ def main():
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
                 st.plotly_chart(fig_fx, width='stretch')
- 
+             
     else:
         # ===== 3) UI Streamlit =====
         st.title("CER (BCRA) con t - 10 días hábiles")
