@@ -14,7 +14,7 @@ import streamlit as st
 from dateutil.relativedelta import relativedelta
 from requests.adapters import HTTPAdapter, Retry
 import certifi
-
+from requests.exceptions import SSLError
 
 # =========================
 # Config Streamlit
@@ -2236,9 +2236,7 @@ LECAPS_ROWS = [
 
 @st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
 def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
-    import certifi
-    from requests.adapters import HTTPAdapter, Retry
-    from requests.exceptions import SSLError
+
 
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
@@ -2334,9 +2332,7 @@ def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
 # === Fetch TAMAR (igual robusto que CER) ===
 @st.cache_data(ttl=60*60*12, show_spinner=False)
 def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
-    import certifi
-    from requests.adapters import HTTPAdapter, Retry
-    from requests.exceptions import SSLError
+
 
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
@@ -2351,7 +2347,7 @@ def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
 
     headers = {"Accept":"application/json","User-Agent":"Mateo-Streamlit/1.0 (+contacto)"}
     try:
-        r = session.get(url, timeout=20, headers=headers)
+        r = session.get(url, timeout=20, headers=headers, verify = False)
         r.raise_for_status()
         js = r.json()
     except SSLError as e:
