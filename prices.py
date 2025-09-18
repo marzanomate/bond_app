@@ -1112,7 +1112,7 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
         outstanding=0.0, calificacion="-"
     )
 
-    bcp_map = {k: v for k, v in {"TY30P": ty30p_bcp, "TO26": to26_bcp}.items() if np.isfinite(v.price)}
+    bcp_map = {k: v for k, v in {"TY30P": ty30p, "TO26": to26}.items() if np.isfinite(v.price)}
  
     extras = []
     for b in [ty30p, to26]:
