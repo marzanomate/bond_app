@@ -1947,14 +1947,14 @@ def main():
         # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
         df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
-        df_extra_bonos = build_extra_ars_bonds_for_lecaps(df_all_norm)
+        df_extra_bonos, bcp_map = build_extra_ars_bonds_for_lecaps(df_all_norm)
         df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
         st.subheader("Métricas de LECAPs/BONCAPs")
         st.dataframe(df_lecaps, width='stretch', hide_index=True)
     
         # ---------- Objetos para cálculos (solo LECAPs) ----------
-        bcp_map = {k: v for k, v in {"TY30P": ty30p, "TO26": to26}.items() if np.isfinite(v.price)}
+
         le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm)
     
         st.divider()
@@ -1975,6 +1975,7 @@ def main():
                     if bname in bcp_map:
                         b = bcp_map[bname]
                         y = b.yield_from_price(prc_in)
+                        st.dataframe(df_one, width='stretch', hide_index=True)
                         if np.isnan(y):
                             st.error("No se pudo calcular la TIR con ese precio.")
                         else:
@@ -2004,32 +2005,33 @@ def main():
                                 df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
                             st.dataframe(df_one, width='stretch', hide_index=True)
 
-                # ---- LECAPs/BONCAPs (lecaps) ----
-                else:
-                    b = le_map[bname]
-                    y = b.yield_from_price(prc_in)
-                    if np.isnan(y):
-                        st.error("No se pudo calcular la TIR con ese precio.")
+                    # ---- LECAPs/BONCAPs (lecaps) ----
                     else:
-                        st.success(f"TIR efectiva anual: **{y:.2f}%**")
-                        old = b.price
-                        try:
-                            b.price = prc_in
-                            df_one = pd.DataFrame([{
-                                "Ticker": b.name,
-                                "Precio": prc_in,
-                                "TIR": b.xirr(),
-                                "TNA 30": b.tna30(),
-                                "Duration": b.duration(),
-                                "Modified Duration": b.modified_duration(),
-                                "Retorno Directo": b.direct_return(),
-                            }])
-                        finally:
-                            b.price = old
-    
-                        for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
-                            df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
+                        b = le_map[bname]
+                        y = b.yield_from_price(prc_in)
                         st.dataframe(df_one, width='stretch', hide_index=True)
+                        if np.isnan(y):
+                            st.error("No se pudo calcular la TIR con ese precio.")
+                        else:
+                            st.success(f"TIR efectiva anual: **{y:.2f}%**")
+                            old = b.price
+                            try:
+                                b.price = prc_in
+                                df_one = pd.DataFrame([{
+                                    "Ticker": b.name,
+                                    "Precio": prc_in,
+                                    "TIR": b.xirr(),
+                                    "TNA 30": b.tna30(),
+                                    "Duration": b.duration(),
+                                    "Modified Duration": b.modified_duration(),
+                                    "Retorno Directo": b.direct_return(),
+                                }])
+                            finally:
+                                b.price = old
+        
+                            for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
+                                df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
+                            st.dataframe(df_one, width='stretch', hide_index=True)
     
         with tab_yld:
             if not le_map and not bcp_map:
