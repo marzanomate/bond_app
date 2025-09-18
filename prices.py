@@ -1,7 +1,7 @@
 # app.py
 import io
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Dict, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
