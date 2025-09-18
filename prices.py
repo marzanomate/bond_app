@@ -1112,6 +1112,8 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
         outstanding=0.0, calificacion="-"
     )
 
+    bcp_map = {k: v for k, v in {"TY30P": ty30p_bcp, "TO26": to26_bcp}.items() if np.isfinite(v.price)}
+ 
     extras = []
     for b in [ty30p, to26]:
         try:
@@ -1960,61 +1962,105 @@ def main():
         tab_prc, tab_yld = st.tabs(["Precio → Rendimiento", "Rendimiento → Precio"])
     
         with tab_prc:
-            if not le_map:
-                st.info("No se pudieron construir objetos LECAP. Verificá precios de mercado.")
+            if not le_map and not bcp_map:
+                st.info("No se pudieron construir instrumentos. Verificá precios de mercado.")
             else:
-                tickers = sorted(le_map.keys())
-                bname = st.selectbox("Elegí LECAP/BONCAP", tickers, key="lx_px2y")
-                prc_in = st.number_input("Precio (clean) → TIR e.a. (%)", min_value=0.0, step=0.1, value=0.0, key="lx_px")
-                if st.button("Calcular TIR", key="btn_lx_px2y"):
-                    b = le_map[bname]
-                    y = b.yield_from_price(prc_in)
-                    if np.isnan(y):
-                        st.error("No se pudo calcular la TIR con ese precio.")
-                    else:
-                        st.success(f"TIR efectiva anual: **{y:.2f}%**")
-    
-                        # Métricas a ese precio (sin mutar el original)
-                        old = b.price
-                        try:
-                            b.price = prc_in
-                            df_one = pd.DataFrame([{
-                                "Ticker": b.name,
-                                "Precio": prc_in,
-                                "TIR": b.xirr(),
-                                "TNA 30": b.tna30(),
-                                "Duration": b.duration(),
-                                "Modified Duration": b.modified_duration(),
-                                "Retorno Directo": b.direct_return(),
-                            }])
-                        finally:
-                            b.price = old
-    
-                        for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
-                            df_one[c] = pd.to_numeric(df_one[c], errors="coerce")
-                        df_one["Precio"] = df_one["Precio"].round(2)
-                        for c in ["TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
-                            df_one[c] = df_one[c].round(2)
-                        st.dataframe(df_one, width='stretch', hide_index=True)
+                tickers_any = sorted(list(le_map.keys()) + list(bcp_map.keys()))
+                bname = st.selectbox("Elegí instrumento", tickers_any, key="any_px2y")
+                prc_in = st.number_input("Precio (clean) → TIR e.a. (%)", min_value=0.0, step=0.1, value=0.0, key="any_px")
+        
+                if st.button("Calcular TIR", key="btn_any_px2y"):
+                    # ---- Bonos fijos ARS (bond_calculator_pro) ----
+                    if bname in bcp_map:
+                        b = bcp_map[bname]
+                        y = b.yield_from_price(prc_in)
+                        if np.isnan(y):
+                            st.error("No se pudo calcular la TIR con ese precio.")
+                        else:
+                            st.success(f"TIR efectiva anual: **{y:.2f}%**")
+                            old = b.price
+                            try:
+                                b.price = prc_in
+                                irr = b.xirr()
+                                dur = b.duration()
+                                md  = b.modified_duration()
+                                # Retorno Directo y TNA30 (30/365 → *12)
+                                direct = ((1 + irr/100.0)**(dur if np.isfinite(dur) else 0.0) - 1.0) * 100.0 if np.isfinite(irr) and np.isfinite(dur) else np.nan
+                                tna30 = (((1 + irr/100.0)**(30/365) - 1.0) * 12.0 * 100.0) if np.isfinite(irr) else np.nan
+                                df_one = pd.DataFrame([{
+                                    "Ticker": b.name,
+                                    "Precio": prc_in,
+                                    "TIR": irr,
+                                    "TNA 30": tna30,
+                                    "Duration": dur,
+                                    "Modified Duration": md,
+                                    "Retorno Directo": direct,
+                                }])
+                            finally:
+                                b.price = old
+        
+                            for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
+                                df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
+                            st.dataframe(df_one, width='stretch', hide_index=True)
+
+            # ---- LECAPs/BONCAPs (lecaps) ----
+            else:
+                b = le_map[bname]
+                y = b.yield_from_price(prc_in)
+                if np.isnan(y):
+                    st.error("No se pudo calcular la TIR con ese precio.")
+                else:
+                    st.success(f"TIR efectiva anual: **{y:.2f}%**")
+                    old = b.price
+                    try:
+                        b.price = prc_in
+                        df_one = pd.DataFrame([{
+                            "Ticker": b.name,
+                            "Precio": prc_in,
+                            "TIR": b.xirr(),
+                            "TNA 30": b.tna30(),
+                            "Duration": b.duration(),
+                            "Modified Duration": b.modified_duration(),
+                            "Retorno Directo": b.direct_return(),
+                        }])
+                    finally:
+                        b.price = old
+
+                    for c in ["Precio","TIR","TNA 30","Duration","Modified Duration","Retorno Directo"]:
+                        df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
+                    st.dataframe(df_one, width='stretch', hide_index=True)
     
         with tab_yld:
-            if not le_map:
-                st.info("No se pudieron construir objetos LECAP. Verificá precios de mercado.")
+            if not le_map and not bcp_map:
+                st.info("No se pudieron construir instrumentos. Verificá precios de mercado.")
             else:
-                tickers2 = sorted(le_map.keys())
-                bname2 = st.selectbox("Elegí LECAP/BONCAP", tickers2, key="lx_y2px")
-                yld_in = st.number_input("TIR e.a. (%) → Precio (clean)", min_value=-99.0, step=0.1, value=0.0, key="lx_y")
-                if st.button("Calcular Precio", key="btn_lx_y2px"):
-                    b2 = le_map[bname2]
-                    p = b2.price_from_irr(yld_in)
-                    if np.isnan(p):
-                        st.error("No se pudo calcular el precio con esa TIR.")
+                tickers2_any = sorted(list(le_map.keys()) + list(bcp_map.keys()))
+                bname2 = st.selectbox("Elegí instrumento", tickers2_any, key="any_y2px")
+                yld_in = st.number_input("TIR e.a. (%) → Precio (clean)", min_value=-99.0, step=0.1, value=0.0, key="any_y")
+        
+                if st.button("Calcular Precio", key="btn_any_y2px"):
+                    # ---- Bonos fijos ARS (bond_calculator_pro) ----
+                    if bname2 in bcp_map:
+                        b2 = bcp_map[bname2]
+                        p = b2.price_from_irr(yld_in)
+                        if np.isnan(p):
+                            st.error("No se pudo calcular el precio con esa TIR.")
+                        else:
+                            st.success(f"Precio clean: **{p:.2f}**")
+                            tir_check = b2.yield_from_price(p)
+                            st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
+        
+                    # ---- LECAPs/BONCAPs (lecaps) ----
                     else:
-                        st.success(f"Precio clean: **{p:.2f}**")
-                        # Chequeo TIR con ese precio
-                        tir_check = b2.yield_from_price(p)
-                        st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
-    
+                        b2 = le_map[bname2]
+                        p = b2.price_from_irr(yld_in)
+                        if np.isnan(p):
+                            st.error("No se pudo calcular el precio con esa TIR.")
+                        else:
+                            st.success(f"Precio clean: **{p:.2f}**")
+                            tir_check = b2.yield_from_price(p)
+                            st.caption(f"Chequeo: TIR con ese precio = **{tir_check:.2f}%**")
+            
         # ---------- Curva excluyendo TTM, TTJ, TTS, TTD ----------
         st.divider()
         st.subheader("Curva Tasa Fija")
