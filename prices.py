@@ -66,7 +66,7 @@ def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
     except SSLError as e:
         # ⚠️ fallback inseguro: solo si la validación SSL falla
         try:
-            
+            st.warning("")
         except Exception:
             pass  # por si no estás en Streamlit en este contexto
         r = session.get(url, timeout=20, headers=headers, verify=False)
@@ -153,7 +153,7 @@ def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
         js = r.json()
     except SSLError as e:
         # 🔁 fallback (inseguro) solo si falla la validación
-        try: st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+        try: st.warning("")
         except Exception: pass
         r = session.get(url, timeout=20, headers=headers, verify=False)
         r.raise_for_status()
@@ -258,7 +258,7 @@ def fetch_oficial_df(series_id: int = 5) -> pd.DataFrame:
         js = r.json()
     except SSLError as e:
         try:
-            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+            st.warning("")
         except Exception:
             pass
         r = session.get(url, timeout=20, headers=headers, verify=False)
