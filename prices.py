@@ -15,6 +15,10 @@ from dateutil.relativedelta import relativedelta
 from requests.adapters import HTTPAdapter, Retry
 import certifi
 from requests.exceptions import SSLError
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
+from requests.exceptions import HTTPError, RequestException, ConnectTimeout, ReadTimeout
+import os
 
 # =========================
 # Config Streamlit
