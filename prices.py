@@ -1076,12 +1076,11 @@ def _tna30_tem_from_irr_ea(irr_pct: float):
 #  Agrego TO26/BONTE
 # ----------------------------------------------------------------------------
 
-def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
+def build_extra_ars_bonds_for_lecaps(df_all_norm):
     """
-    Crea TY30P y TO26 usando bond_calculator_pro y devuelve un DF
-    con el MISMO esquema que usa la tabla de LECAPs:
-    ['Ticker','Tipo','Vencimiento','Precio','Rendimiento (TIR EA)',
-     'Retorno Directo','TNA 30','TEM','Duration','Modified Duration']
+    Crea TY30P y TO26 usando bond_calculator_pro y devuelve:
+    - df_extra_bonos: DataFrame con el mismo esquema de LECAPs
+    - bcp_map: dict {ticker: objeto bond_calculator_pro} para usar en precio↔rendimiento
     """
     import numpy as np
 
@@ -1091,7 +1090,7 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
         except Exception:
             return np.nan
 
-    # --- Instancias con bond_calculator_pro (sin step-ups) ---
+    # --- Bonos fijos ARS ---
     ty30p = bond_calculator_pro(
         name="TY30P", emisor="Soberano", curr="ARS", law="US",
         start_date=datetime(2025, 11, 30), end_date=datetime(2030, 5, 30),
@@ -1101,7 +1100,6 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
         step_up_dates=[], step_up=[],
         outstanding=0.0, calificacion="-"
     )
-
     to26 = bond_calculator_pro(
         name="TO26", emisor="Soberano", curr="ARS", law="US",
         start_date=datetime(2016, 10, 17), end_date=datetime(2026, 10, 17),
@@ -1111,27 +1109,33 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
         step_up_dates=[], step_up=[],
         outstanding=0.0, calificacion="-"
     )
- 
+
+    # Solo incluí en bcp_map los que tienen precio finito
+    bcp_map = {b.name: b for b in (ty30p, to26) if np.isfinite(b.price)}
+
+    # Construyo el DataFrame para la tabla
     extras = []
-    for b in [ty30p, to26]:
+    for b in (ty30p, to26):
         try:
-            irr_pct = float(b.xirr())                  # TIR EA en %
-            dur     = float(b.duration())              # años
+            irr_pct = float(b.xirr())                  # % EA
+            dur     = float(b.duration())
             mdur    = float(b.modified_duration())
-            tna30, tem = _tna30_tem_from_irr_ea(irr_pct)
-            # Retorno Directo ≈ (1+irr)^Dur - 1
-            irr_dec = irr_pct / 100.0 if np.isfinite(irr_pct) else np.nan
-            direct  = ((1.0 + irr_dec) ** dur - 1.0) * 100.0 if np.isfinite(dur) else np.nan
+            # TNA30 y TEM desde TIR EA (30/365)
+            tem = (1.0 + irr_pct/100.0) ** (30.0/365.0) - 1.0
+            tna30 = tem * 12.0 * 100.0
+            tem_pct = tem * 100.0
+            # Retorno directo ≈ (1+irr)^Dur - 1
+            direct  = ((1.0 + irr_pct/100.0) ** dur - 1.0) * 100.0 if np.isfinite(dur) else np.nan
 
             extras.append({
                 "Ticker": b.name,
-                "Tipo": "Bono Fijo",                                  # etiqueta para la leyenda
+                "Tipo": "Bono Fijo",
                 "Vencimiento": b.end_date.strftime("%d/%m/%Y"),
                 "Precio": round(b.price, 2) if np.isfinite(b.price) else np.nan,
                 "Rendimiento (TIR EA)": round(irr_pct, 2) if np.isfinite(irr_pct) else np.nan,
                 "Retorno Directo": round(direct, 2) if np.isfinite(direct) else np.nan,
-                "TNA 30": tna30,
-                "TEM": tem,
+                "TNA 30": round(tna30, 2) if np.isfinite(tna30) else np.nan,
+                "TEM": round(tem_pct, 2) if np.isfinite(tem_pct) else np.nan,
                 "Duration": round(dur, 2) if np.isfinite(dur) else np.nan,
                 "Modified Duration": round(mdur, 2) if np.isfinite(mdur) else np.nan,
             })
@@ -1143,11 +1147,13 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm: pd.DataFrame) -> pd.DataFrame:
                 "TNA 30": np.nan, "TEM": np.nan, "Duration": np.nan, "Modified Duration": np.nan
             })
 
-    return pd.DataFrame(extras, columns=[
+    df_extra = pd.DataFrame(extras, columns=[
         "Ticker","Tipo","Vencimiento","Precio",
         "Rendimiento (TIR EA)","Retorno Directo","TNA 30","TEM",
         "Duration","Modified Duration"
     ])
+
+    return df_extra, bcp_map
 
 # =========================
 # Manual: lista de soberanos
