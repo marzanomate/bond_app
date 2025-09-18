@@ -2331,7 +2331,7 @@ def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
 # -----------------------------------------------------------
 # TAMAR (robusto con retries y fallback SSL)
 # -----------------------------------------------------------
-@st.cache_data(ttl=60*60*12, show_spinner=False)
+@st.cache_data(ttl=60*60*12, show_spinner=False)  # 12 hs
 def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
     import certifi
     from requests.adapters import HTTPAdapter, Retry
@@ -2349,25 +2349,24 @@ def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
         allowed_methods=frozenset(["GET"])
     )
     session.mount("https://", HTTPAdapter(max_retries=retries))
-    session.verify = certifi.where()
+    session.verify = certifi.where()  # bundle confiable
 
     headers = {"Accept": "application/json", "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"}
 
     try:
         r = session.get(url, timeout=20, headers=headers)
         r.raise_for_status()
+        js = r.json()
     except SSLError as e:
-        if not st.session_state.get("bcra_ssl_warned", False):
-            st.session_state["bcra_ssl_warned"] = True
-            st.warning(
-                f"Problema de certificado SSL ({e}). Reintentando sin verificación…"
-            )
-        # fallback inseguro
+        # fallback inseguro SOLO si falla la validación
+        try:
+            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+        except Exception:
+            pass
         r = session.get(url, timeout=20, headers=headers, verify=False)
         r.raise_for_status()
+        js = r.json()
 
-
-    js = r.json()
     if "results" not in js or not js["results"]:
         raise ValueError("Respuesta sin 'results' o vacía del BCRA.")
     if "detalle" not in js["results"][0]:
@@ -2375,20 +2374,20 @@ def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
 
     df = pd.DataFrame(js["results"][0]["detalle"])
     df = (
-        df.assign(
+        df[["fecha", "valor"]]
+        .assign(
             fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"),
-            TAMAR_pct_na=lambda d: pd.to_numeric(d["valor"], errors="coerce"),
-        )[["fecha", "TAMAR_pct_na"]]
-        .dropna()
+            valor=lambda d: pd.to_numeric(d["valor"], errors="coerce"),
+        )
+        .dropna(subset=["fecha", "valor"])
         .sort_values("fecha")
-        .set_index("fecha")
+        .reset_index(drop=True)
     )
     return df
-
-# --- helper: n filas "arriba" respecto a una fecha ancla ---
+# === 2) Helper igual al tuyo para elegir "n filas arriba" de una ancla ===
 def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) -> pd.Timestamp:
     anchor = pd.Timestamp(anchor)
-    pos = idx.searchsorted(anchor, side="right") - 1
+    pos = idx.searchsorted(anchor, side="right") - 1  # última <= anchor
     if pos < 0:
         pos = 0
     pos_n = max(pos - n, 0)
@@ -2401,45 +2400,44 @@ except Exception as e:
     st.error(f"No se pudo obtener TAMAR del BCRA: {e}")
     df_tamar = pd.DataFrame(columns=["TAMAR_pct_na"])
 
-idx = df_tamar.index
+# === 3) Cálculo de TEM TAMAR (mismo método que escribiste) ===
+df_tamar = fetch_tamar_df(44)  # serie TAMAR
+df_tamar = df_tamar.rename(columns={"valor": "TAMAR_pct_na"}).set_index("fecha").sort_index()
+
+idx    = df_tamar.index
 today  = pd.Timestamp.today().normalize()
-jan29  = pd.Timestamp(year=today.year, month=1, day=29)
-ago18  = pd.Timestamp(year=today.year, month=8, day=18)
-ago29  = pd.Timestamp(year=today.year, month=8, day=29)
+jan29  = pd.Timestamp(year=today.year, month=1, day=29)  # duales
+ago18  = pd.Timestamp(year=today.year, month=8, day=18)  # M10N5 y M16E6
+ago29  = pd.Timestamp(year=today.year, month=8, day=29)  # M27F6
 
-if not idx.empty:
-    start        = rows_before_label(idx, jan29, 9)   # Duales
-    start_m10n5  = rows_before_label(idx, ago18, 9)   # M10N5
-    start_m16e6  = rows_before_label(idx, ago18, 9)   # M16E6
-    start_m27f6  = rows_before_label(idx, ago29, 9)   # M27F6
-    end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
+start        = rows_before_label(idx, jan29,  9)
+start_m10n5  = rows_before_label(idx, ago18,  9)
+start_m16e6  = rows_before_label(idx, ago18,  9)
+start_m27f6  = rows_before_label(idx, ago29,  9)
+end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
 
-    tamar_window         = df_tamar.loc[start:end, "TAMAR_pct_na"]
-    tamar_window_m10n5   = df_tamar.loc[start_m10n5:end, "TAMAR_pct_na"]
-    tamar_window_m16e6   = df_tamar.loc[start_m16e6:end, "TAMAR_pct_na"]
-    tamar_window_m27f6   = df_tamar.loc[start_m27f6:end, "TAMAR_pct_na"]
+tamar_window         = df_tamar.loc[start:end, "TAMAR_pct_na"]
+tamar_window_m10n5   = df_tamar.loc[start_m10n5:end, "TAMAR_pct_na"]
+tamar_window_m16e6   = df_tamar.loc[start_m16e6:end, "TAMAR_pct_na"]
+tamar_window_m27f6   = df_tamar.loc[start_m27f6:end, "TAMAR_pct_na"]
 
-    tamar_avg_pct_na       = tamar_window.mean()
-    tamar_avg_pct_na_m10n5 = tamar_window_m10n5.mean() + 6.0
-    tamar_avg_pct_na_m16e6 = tamar_window_m16e6.mean() + 7.5
-    tamar_avg_pct_na_m27f6 = tamar_window_m27f6.mean() + 1.5
+tamar_avg_pct_na       = tamar_window.mean()
+tamar_avg_pct_na_m10n5 = tamar_window_m10n5.mean() + 6.0
+tamar_avg_pct_na_m16e6 = tamar_window_m16e6.mean() + 7.5
+tamar_avg_pct_na_m27f6 = tamar_window_m27f6.mean() + 1.5
 
-    # TEM mensual (promedio TAMAR en % no anualizado → conv 32/365 → anual efectivo → raíz 12)
-    tamar_tem       = ((1 + tamar_avg_pct_na       * 32/365)**(365/32))**(1/12) - 1
-    tamar_tem_m10n5 = ((1 + tamar_avg_pct_na_m10n5 * 32/365)**(365/32))**(1/12) - 1
-    tamar_tem_m16e6 = ((1 + tamar_avg_pct_na_m16e6 * 32/365)**(365/32))**(1/12) - 1
-    tamar_tem_m27f6 = ((1 + tamar_avg_pct_na_m27f6 * 32/365)**(365/32))**(1/12) - 1
+# pasar de tasa “na” con base 32 días a TEM mensual (mismo esquema que usabas)
+def avg_na_to_tem(avg_na):
+    # (1 + r_na * 32/365) ^ (365/32) => EA ; luego ^(1/12) -1 => mensual
+    return ((1 + avg_na * 32/365)**(365/32))**(1/12) - 1
 
-    # Último valor disponible <= hoy (compatible pandas 2.x)
-    try:
-        tamar_hoy = df_tamar.loc[:today, "TAMAR_pct_na"].iloc[-1]
-    except Exception:
-        tamar_hoy = float("nan")
-else:
-    st.warning("No hay datos TAMAR disponibles.")
-    tamar_tem = tamar_tem_m10n5 = tamar_tem_m16e6 = tamar_tem_m27f6 = float("nan")
-    tamar_hoy = float("nan")
+tamar_tem       = avg_na_to_tem(tamar_avg_pct_na)
+tamar_tem_m10n5 = avg_na_to_tem(tamar_avg_pct_na_m10n5)
+tamar_tem_m16e6 = avg_na_to_tem(tamar_avg_pct_na_m16e6)
+tamar_tem_m27f6 = avg_na_to_tem(tamar_avg_pct_na_m27f6)
 
+# último valor observado (<= hoy) sin usar .asof()
+tamar_hoy = float(df_tamar.loc[df_tamar.index <= today, "TAMAR_pct_na"].iloc[-1])
 # =========================
 # App UI
 # =========================
