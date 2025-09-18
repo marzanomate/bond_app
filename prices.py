@@ -13,6 +13,7 @@ import requests
 import streamlit as st
 from dateutil.relativedelta import relativedelta
 from requests.adapters import HTTPAdapter, Retry
+import certifi
 
 
 # =========================
