@@ -25,7 +25,251 @@ import os
 # =========================
 
 st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
- 
+
+# -------------------------------------------------
+# Traigo el CER
+# -------------------------------------------------
+# ===== 1) Fetch robusto con cache =====
+
+@st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
+def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
+
+
+    base = "https://api.bcra.gob.ar/estadisticas"
+    version = "v4.0"
+    url = f"{base}/{version}/monetarias/{series_id}"
+
+    session = requests.Session()
+    retries = Retry(
+        total=5,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"])
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
+    # 🔒 usar bundle de certificados confiables
+    session.verify = certifi.where()
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"
+    }
+
+    try:
+        r = session.get(url, timeout=20, headers=headers)
+        r.raise_for_status()
+        js = r.json()
+    except SSLError as e:
+        # ⚠️ fallback inseguro: solo si la validación SSL falla
+        try:
+            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+        except Exception:
+            pass  # por si no estás en Streamlit en este contexto
+        r = session.get(url, timeout=20, headers=headers, verify=False)
+        r.raise_for_status()
+        js = r.json()
+
+    # Validación básica del schema
+    if "results" not in js or not js["results"]:
+        raise ValueError("Respuesta sin 'results' o vacía del BCRA.")
+    if "detalle" not in js["results"][0]:
+        raise ValueError("No se encontró 'detalle' en results[0].")
+
+    df = pd.DataFrame(js["results"][0]["detalle"])
+    df = (
+        df[["fecha", "valor"]]
+        .assign(
+            fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"),
+            valor=lambda d: pd.to_numeric(d["valor"], errors="coerce"),
+        )
+        .dropna(subset=["fecha", "valor"])
+        .sort_values("fecha")
+        .reset_index(drop=True)
+    )
+    return df
+
+# ===== 2) Días hábiles: usa QuantLib si está disponible; si no, fallback Mon–Fri =====
+def last_business_day_arg(lag_business_days: int = 10) -> date:
+    # Intento con QuantLib (calendario Argentina Merval)
+    try:
+        import QuantLib as ql
+        cal = ql.Argentina(ql.Argentina.Merval)
+
+        qd = ql.Date.todaysDate() + 1  # asumiendo liquidación T+1
+        # retrocedo 'lag_business_days' días hábiles
+        count = 0
+        while count < lag_business_days:
+            qd = qd - 1
+            if cal.isBusinessDay(qd):
+                count += 1
+        return date(qd.year(), qd.month(), qd.dayOfMonth())
+
+    except Exception:
+        # Fallback simple: cuenta solo Mon–Fri (sin feriados)
+        # Si te interesa feriados reales sin QuantLib, considera 'workalendar'
+        d = datetime.utcnow().date() + timedelta(days=1)
+        count = 0
+        while count < lag_business_days:
+            d = d - timedelta(days=1)
+            if d.weekday() < 5:  # 0=Mon ... 4=Fri
+                count += 1
+        return d
+
+def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
+    # Filtra hasta target (incluye ese día)
+    sel = df[df["fecha"].dt.date <= target_day]
+    if sel.empty:
+        raise ValueError("No hay datos de CER previos a la fecha objetivo.")
+    return float(sel.iloc[-1]["valor"])
+
+# -----------------------------------------------------------
+# TAMAR (robusto con retries y fallback SSL)
+# -----------------------------------------------------------
+
+# === Fetch TAMAR (igual robusto que CER) ===
+@st.cache_data(ttl=60*60*12, show_spinner=False)
+def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
+    base = "https://api.bcra.gob.ar/estadisticas"
+    version = "v4.0"
+    url = f"{base}/{version}/monetarias/{series_id}"
+
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=0.5,
+                    status_forcelist=(429,500,502,503,504),
+                    allowed_methods=frozenset(["GET"]))
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    session.verify = certifi.where()
+
+    headers = {"Accept":"application/json","User-Agent":"Mateo-Streamlit/1.0 (+contacto)"}
+
+    try:
+        # ✅ primer intento con verificación TLS normal
+        r = session.get(url, timeout=20, headers=headers)
+        r.raise_for_status()
+        js = r.json()
+    except SSLError as e:
+        # 🔁 fallback (inseguro) solo si falla la validación
+        try: st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+        except Exception: pass
+        r = session.get(url, timeout=20, headers=headers, verify=False)
+        r.raise_for_status()
+        js = r.json()
+
+    if "results" not in js or not js["results"] or "detalle" not in js["results"][0]:
+        raise ValueError("Respuesta inválida del BCRA.")
+
+    df = pd.DataFrame(js["results"][0]["detalle"])[["fecha","valor"]]
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
+    df = df.dropna(subset=["fecha","valor"]).sort_values("fecha").reset_index(drop=True)
+    return df
+
+def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) -> pd.Timestamp:
+    anchor = pd.Timestamp(anchor)
+    pos = idx.searchsorted(anchor, side="right") - 1
+    if pos < 0: pos = 0
+    pos_n = max(pos - n, 0)
+    return idx[pos_n]
+
+# === Uso (una sola vez) ===
+try:
+    df_tamar_raw = fetch_tamar_df(44)
+except Exception as e:
+    st.error(f"No se pudo obtener TAMAR del BCRA: {e}")
+    df_tamar_raw = pd.DataFrame()
+
+if df_tamar_raw.empty:
+    st.info("Sin datos TAMAR disponibles por ahora.")
+else:
+    # % NA -> decimal
+    df_tamar = (
+        df_tamar_raw
+        .rename(columns={"valor": "tamar_na_pct"})
+        .assign(tamar_na_dec=lambda d: d["tamar_na_pct"].apply(lambda x: x/100.0 if x is not None else np.nan))
+        .set_index("fecha")
+        .sort_index()
+    )
+
+    idx    = df_tamar.index
+    today  = pd.Timestamp.today().normalize()
+    jan29  = pd.Timestamp(year=today.year, month=1, day=29)  # duales
+    ago18  = pd.Timestamp(year=today.year, month=8, day=18)  # M10N5 / M16E6
+    ago29  = pd.Timestamp(year=today.year, month=8, day=29)  # M27F6
+
+    start        = rows_before_label(idx, jan29,  9)
+    start_m10n5  = rows_before_label(idx, ago18,  9)
+    start_m16e6  = rows_before_label(idx, ago18,  9)
+    start_m27f6  = rows_before_label(idx, ago29,  9)
+    end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
+
+    s = "tamar_na_dec"
+    tamar_window         = df_tamar.loc[start:end, s]
+    tamar_window_m10n5   = df_tamar.loc[start_m10n5:end, s]
+    tamar_window_m16e6   = df_tamar.loc[start_m16e6:end, s]
+    tamar_window_m27f6   = df_tamar.loc[start_m27f6:end, s]
+
+    tamar_avg_na       = float(tamar_window.mean())
+    tamar_avg_na_m10n5 = float(tamar_window_m10n5.mean()) + 0.06   # +6pp -> +0.06 en decimal
+    tamar_avg_na_m16e6 = float(tamar_window_m16e6.mean()) + 0.075  # +7.5pp
+    tamar_avg_na_m27f6 = float(tamar_window_m27f6.mean()) + 0.015  # +1.5pp
+
+    # (1 + r_na * 32/365) ^ (365/32) -> EA ; luego ^(1/12) - 1 -> TEM
+    def na_avg_to_tem(avg_na_dec: float) -> float:
+        return ((1 + avg_na_dec * 32/365)**(365/32))**(1/12) - 1
+
+    tamar_tem       = na_avg_to_tem(tamar_avg_na)
+    tamar_tem_m10n5 = na_avg_to_tem(tamar_avg_na_m10n5)
+    tamar_tem_m16e6 = na_avg_to_tem(tamar_avg_na_m16e6)
+    tamar_tem_m27f6 = na_avg_to_tem(tamar_avg_na_m27f6)
+
+    # último valor observado (<= hoy)
+    tamar_hoy = float(df_tamar.loc[df_tamar.index <= today, "tamar_na_pct"].iloc[-1])
+
+    # Si después lo llevás a build_lecaps_metrics (que espera %), recordá multiplicar por 100:
+    # ej: TEM_% = tamar_tem * 100.0
+
+# --------------------------------------------------------
+# Último tipo de cambio oficial (serie 5) <= hoy
+# --------------------------------------------------------
+
+@st.cache_data(ttl=60*60*12, show_spinner=False)
+def fetch_oficial_df(series_id: int = 5) -> pd.DataFrame:
+    base = "https://api.bcra.gob.ar/estadisticas"
+    version = "v4.0"
+    url = f"{base}/{version}/monetarias/{series_id}"
+
+    session = requests.Session()
+    retries = Retry(
+        total=5, backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"])
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    session.verify = certifi.where()
+    headers = {"Accept": "application/json", "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"}
+
+    try:
+        r = session.get(url, timeout=20, headers=headers)
+        r.raise_for_status()
+        js = r.json()
+    except SSLError as e:
+        try:
+            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
+        except Exception:
+            pass
+        r = session.get(url, timeout=20, headers=headers, verify=False)
+        r.raise_for_status()
+        js = r.json()
+
+    if "results" not in js or not js["results"] or "detalle" not in js["results"][0]:
+        raise ValueError("Respuesta inválida del BCRA (serie 5).")
+
+    df = pd.DataFrame(js["results"][0]["detalle"])[["fecha", "valor"]]
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
+    return df.dropna().sort_values("fecha").reset_index(drop=True)
+
 # =========================
 # Clase bond_calculator_pro
 # =====================
@@ -794,7 +1038,7 @@ class cer_bonos:
     def xirr(self):
         f = lambda r: self.xnpv(rate_custom=r)
         try:
-            r = scipy.optimize.newton(f, 0.0)
+            r = optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
         except RuntimeError:
             r = scipy.optimize.brentq(f, -0.99, 10.0)
         return round(r * 100.0, 2)  # % E.A.
@@ -918,7 +1162,7 @@ class cer:
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
         try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
+            result = optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
         except RuntimeError:
             result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
         return round(result * 100, 2)
@@ -950,6 +1194,28 @@ class cer:
         irr = self.xirr() / 100
         return round(dur / (1 + irr), 2)    
      
+    # dentro de class cer
+    def price_from_irr(self, irr_pct: float) -> float:
+        # descontá el pago final a T años (ACT/365)
+        try:
+            r = float(irr_pct)/100.0
+            if not np.isfinite(r): return float("nan")
+            d0 = self.settlement
+            dm = self._adjust_next_business_day(self.end_date)
+            t  = max(0.0, (dm - d0).days/360.0)
+            final_payment = 100.0 * (self.cer_final/self.cer_inicial)
+            return round(final_payment / ((1.0 + r)**t), 2)
+        except Exception:
+            return float("nan")
+    
+    def yield_from_price(self, price_override: float) -> float:
+        old = self.price
+        try:
+            self.price = float(price_override)
+            return float(self.xirr())
+        finally:
+            self.price = old
+     
 # -----------------------------------------------------------------------------
 # Calculadora de Bonos DLK
 # -----------------------------------------------------------------------------
@@ -959,7 +1225,7 @@ class dlk:
         self.name = name
         self.start_date = start_date
         self.end_date = end_date
-        self.mep = mep
+        self.oficial = oficial
         self.price = price
         self.settlement = datetime.today() + timedelta(days=1)
         self.calendar = ql.Argentina(ql.Argentina.Merval)
@@ -987,7 +1253,7 @@ class dlk:
         days = dc.dayCount(ql_start, ql_end)
         months = days / 30  # Approximate 30-day months
 
-        final_payment = 100 * self.mep
+        final_payment = 100 * self.oficial
 
         payments.append(-self.price)
         payments.append(final_payment)
@@ -1008,7 +1274,7 @@ class dlk:
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
         try:
-            result = scipy.optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
+            result = optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
         except RuntimeError:
             result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
         return round(result * 100, 2)
@@ -1039,6 +1305,28 @@ class dlk:
         dur = self.duration()
         irr = self.xirr() / 100
         return round(dur / (1 + irr), 2)  
+
+    # dentro de class cer
+    def price_from_irr(self, irr_pct: float) -> float:
+        # descontá el pago final a T años (ACT/365)
+        try:
+            r = float(irr_pct)/100.0
+            if not np.isfinite(r): return float("nan")
+            d0 = self.settlement
+            dm = self._adjust_next_business_day(self.end_date)
+            t  = max(0.0, (dm - d0).days/360.0)
+            final_payment = 100.0 * (self.oficial)
+            return round(final_payment / ((1.0 + r)**t), 2)
+        except Exception:
+            return float("nan")
+    
+    def yield_from_price(self, price_override: float) -> float:
+        old = self.price
+        try:
+            self.price = float(price_override)
+            return float(self.xirr())
+        finally:
+            self.price = old
 
 # =========================
 # Helpers de parsing Excel
@@ -1095,8 +1383,93 @@ def normalize_rate_to_percent(r):
 # ===== Helpers universales Precio↔Rendimiento para cer_bonos / cer / dlk / lecaps =====
 # ------------------------------------------------------------------
 
+# ------------------------------------------------------------------
+# ===== Helpers universales (Otros) =====
+# Aplica a: cer_bonos / cer / dlk / lecaps (TAMAR)
+# ------------------------------------------------------------------
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+
+# --------- Fechas / formato ----------
+def _parse_dt_dmy(s):
+    """Convierte varias representaciones a datetime (o None). Acepta 'dd/mm/aaaa', 'yyyy-mm-dd', Timestamp, etc."""
+    if s is None:
+        return None
+    if isinstance(s, (datetime, pd.Timestamp)):
+        return pd.Timestamp(s).to_pydatetime()
+    try:
+        if pd.isna(s):
+            return None
+    except Exception:
+        pass
+    s = str(s).strip()
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    try:
+        return pd.to_datetime(s, dayfirst=True, errors="raise").to_pydatetime()
+    except Exception:
+        return None
+
+def _fmt_date(dt_like) -> str:
+    """Devuelve 'dd/mm/aaaa' o '' si no se puede formatear."""
+    try:
+        d = _parse_dt_dmy(dt_like)
+        return d.strftime("%d/%m/%Y") if d else ""
+    except Exception:
+        return ""
+
+def _end_date_from_obj(o):
+    """Intenta obtener la fecha de vencimiento del objeto."""
+    # 1) atributo end_date
+    end_attr = getattr(o, "end_date", None)
+    d = _parse_dt_dmy(end_attr)
+    if d:
+        return d
+    # 2) última fecha de generate_payment_dates()
+    try:
+        dates = o.generate_payment_dates()
+        if dates:
+            return _parse_dt_dmy(dates[-1])
+    except Exception:
+        pass
+    return None
+
+def _dias_al_vto_from_obj(o) -> float:
+    """Días al vencimiento desde T+1 (o desde hoy si no aplica)."""
+    try:
+        ref = datetime.today() + timedelta(days=1)
+        vto = _end_date_from_obj(o)
+        return max(0, (vto - ref).days) if vto else np.nan
+    except Exception:
+        return np.nan
+
+# --------- Pago final ----------
+def _pago_final_from_obj(o) -> float:
+    """Último flujo positivo (capital+cupón ajustado/linked)."""
+    try:
+        cfs = o.cash_flow()
+        return round(float(cfs[-1]), 2)
+    except Exception:
+        return np.nan
+
+# --------- TIR ↔ Precio ----------
 def _any_yield_from_price(obj, price):
-    """TIR EA (%) poniendo temporalmente un precio 'price' en el objeto."""
+    """
+    Devuelve TIR EA (%) fijando temporalmente obj.price=price.
+    Si el objeto tiene yield_from_price (p.ej. lecaps), la usa.
+    """
+    # LECAPs/BONCAPs: método nativo
+    if hasattr(obj, "yield_from_price"):
+        try:
+            return float(obj.yield_from_price(float(price)))
+        except Exception:
+            return float("nan")
+
+    # Genérico: setear price y usar xirr()
     old = getattr(obj, "price", np.nan)
     try:
         obj.price = float(price)
@@ -1108,15 +1481,24 @@ def _any_yield_from_price(obj, price):
 
 def _any_price_from_yield(obj, irr_pct):
     """
-    Precio clean que implica una TIR EA (%) 'irr_pct'.
-    Estrategia: seteamos price=0 y calculamos el PV de los flujos positivos con xnpv.
+    Devuelve Precio clean para una TIR EA (%) dada.
+    Prioriza price_from_irr si existe (LECAPs). De lo contrario,
+    usa el truco: price=0 y PV con xnpv(rate_custom=r).
     """
+    # LECAPs/BONCAPs: método nativo
+    if hasattr(obj, "price_from_irr"):
+        try:
+            return round(float(obj.price_from_irr(float(irr_pct))), 2)
+        except Exception:
+            return float("nan")
+
+    # Genérico vía xnpv (requiere .cash_flow() / .generate_payment_dates() internos)
     old = getattr(obj, "price", np.nan)
     try:
         obj.price = 0.0
         r = float(irr_pct) / 100.0
         p = obj.xnpv(rate_custom=r)
-        return round(p, 2)
+        return round(float(p), 2)
     except Exception:
         return float("nan")
     finally:
@@ -1128,35 +1510,80 @@ def _tna30_tem_from_irr_ea(irr_pct: float):
     tem = (1.0 + irr) ** (30.0 / 365.0) - 1.0
     return round(tem * 12.0 * 100.0, 2), round(tem * 100.0, 2)
 
+# --------- Resúmenes/tablas ----------
+def _one_row_from_obj(o, tipo: str) -> dict:
+    """Fila estándar para panel: Precio, TIREA, Dur, MD, Pago Final, Días, Vto."""
+    # Métricas robustas
+    def _safe(callable_):
+        try:
+            v = callable_()
+            return float(v) if v is not None else np.nan
+        except Exception:
+            return np.nan
+
+    irr = _safe(o.xirr)
+    dur = _safe(o.duration)
+    md  = _safe(o.modified_duration)
+    vto = _end_date_from_obj(o)
+    dias= _dias_al_vto_from_obj(o)
+    prc = getattr(o, "price", np.nan)
+
+    return {
+        "Ticker": getattr(o, "name", ""),
+        "Tipo": tipo,
+        "Vencimiento": _fmt_date(vto),
+        "Días al vencimiento": dias if np.isfinite(dias) else np.nan,
+        "Precio": round(float(prc), 2) if np.isfinite(prc) else np.nan,
+        "TIREA": round(irr, 2) if np.isfinite(irr) else np.nan,
+        "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
+        "MD": round(md, 2) if np.isfinite(md) else np.nan,
+        "Pago Final": _pago_final_from_obj(o),
+    }
+
+def _summarize_objects_table(objs: list, tipo: str) -> pd.DataFrame:
+    """Arma la tabla ordenada por vencimiento para cualquier lista de objetos."""
+    rows = [_one_row_from_obj(o, tipo) for o in objs]
+    df = pd.DataFrame(rows)
+    # ordenar por fecha si es posible
+    try:
+        df["_vto"] = pd.to_datetime(df["Vencimiento"], dayfirst=True, errors="coerce")
+        df = df.sort_values("_vto").drop(columns="_vto")
+    except Exception:
+        pass
+    cols = ["Ticker", "Tipo", "Vencimiento", "Días al vencimiento", "Precio",
+            "TIREA", "Dur", "MD", "Pago Final"]
+    return df[[c for c in cols if c in df.columns]]
+
+# --------- (Opcional) Resumen específico CER Bonos ----------
 def _summarize_cer_bonds(bonds):
-    """Tabla de métricas para objetos cer_bonos (TX25, TX26, etc.)."""
+    """
+    Tabla de métricas para objetos cer_bonos (TX25, TX26, etc.).
+    Incluye TNA/TEM derivados de la TIR para tu conveniencia.
+    """
     rows = []
     for b in bonds:
         try:
-            pago = round(b.cash_flow()[-1], 2)
-            xirr = b.xirr()
-            dur  = b.duration()
-            mdur = b.modified_duration()
-            tna30, tem = _tna30_tem_from_irr_ea(xirr)
+            irr = float(b.xirr())
+            dur = float(b.duration())
+            md  = float(b.modified_duration())
+            pago= _pago_final_from_obj(b)
+            tna30, tem = _tna30_tem_from_irr_ea(irr)
         except Exception:
-            pago = xirr = dur = mdur = tna30 = tem = float('nan')
+            irr = dur = md = pago = tna30 = tem = np.nan
         rows.append({
-            "Ticker": b.name,
+            "Ticker": getattr(b, "name", ""),
             "Tipo": "CER Bono",
-            "Vencimiento": pd.to_datetime(b.end_date).date().strftime("%d/%m/%Y"),
-            "Precio": round(b.price, 2),
-            "Pago": pago,
-            "TIREA": xirr,
+            "Vencimiento": _fmt_date(getattr(b, "end_date", None)),
+            "Precio": round(float(getattr(b, "price", np.nan)), 2) if np.isfinite(getattr(b, "price", np.nan)) else np.nan,
+            "Pago Final": pago,
+            "TIREA": round(irr, 2) if np.isfinite(irr) else np.nan,
             "TNA 30": tna30,
             "TEM": tem,
-            "Dur": dur,
-            "Mod Dur": mdur,
+            "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
+            "MD":  round(md, 2)  if np.isfinite(md)  else np.nan,
         })
-    cols = ["Ticker","Tipo","Vencimiento","Precio","Pago","TIREA","TNA 30","TEM","Dur","Mod Dur"]
+    cols = ["Ticker","Tipo","Vencimiento","Precio","Pago Final","TIREA","TNA 30","TEM","Dur","MD"]
     return pd.DataFrame(rows)[cols]
-
-def _parse_dt_dmy(s: str) -> datetime:
-    return pd.to_datetime(s, dayfirst=True, errors="coerce").to_pydatetime()
  
 # =========================
 # Fetch precios (data912)
@@ -1631,6 +2058,7 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm):
 
     return df_extra, bcp_map
  
+
 # ------------------------------------------------------------------
 # CER Metrics
 # ------------------------------------------------------------------
@@ -1782,82 +2210,67 @@ def build_cer_rows_metrics(rows, df_all, cer_final, today=None):
 # DLK Metrics
 # -------------------------------------------------------------
 
-def build_dlk_metrics(rows, df_all, mep_value, today=None):
-    """
-    rows: list of tuples -> (Ticker, Emision, Vencimiento, Tipo)  # e.g. "Dolar Linked"
-    df_all: DataFrame with at least ['symbol','px_bid'] for price lookup
-    mep_value: float, e.g. df_mep.loc[df_mep["ticker"] == "AL30", "bid"].iloc[0]
-    today: optional pandas.Timestamp to fix 'today' (defaults to today)
-    """
-    import pandas as pd
-    import numpy as np
-    from datetime import datetime
-
-    # 1) Spec DF
-    df_spec = pd.DataFrame(rows, columns=["Ticker", "Emision", "Vencimiento", "Tipo"])
+def build_dlk_metrics(rows, df_all, fx_value, today=None):
+    # rows: (Ticker, Emision, Vencimiento, Tipo)
+    df_spec = pd.DataFrame(rows, columns=["Ticker","Emision","Vencimiento","Tipo"])
+    df_spec["Ticker"] = df_spec["Ticker"].astype(str).str.strip().str.upper()
     df_spec["Emision"]     = pd.to_datetime(df_spec["Emision"],     dayfirst=True, errors="coerce")
     df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
 
-    # 2) Bring prices (px_bid)
-    px = df_all[["symbol", "px_ask"]].rename(columns={"symbol": "Ticker", "px_ask": "Precio"})
-    df_spec = df_spec.merge(px, on="Ticker", how="left")
+    # precios: ask con fallback a bid
+    mkt = normalize_market_df(df_all)
+    if "symbol" in mkt.columns:
+        px_df = mkt[["symbol"] + [c for c in ("px_ask","px_bid") if c in mkt.columns]].copy()
+        px_df["Precio"] = px_df.get("px_ask", np.nan).fillna(px_df.get("px_bid", np.nan)).astype(float)
+        df_spec = df_spec.merge(px_df[["symbol","Precio"]].rename(columns={"symbol":"Ticker"}), on="Ticker", how="left")
+    else:
+        df_spec["Precio"] = np.nan
 
-    # 3) Compute metrics using your dlk class
-    def compute_metrics(row):
-        import numpy as np
+    def compute(row):
         try:
-            if any(pd.isna(row[k]) for k in ["Emision", "Vencimiento", "Precio"]):
-                raise ValueError("Missing inputs")
-
-            obj = dlk(
+            if any(pd.isna(row[k]) for k in ["Emision","Vencimiento","Precio"]):
+                raise ValueError("faltan datos")
+            b = dlk(
                 name=row["Ticker"],
                 start_date=row["Emision"].to_pydatetime(),
                 end_date=row["Vencimiento"].to_pydatetime(),
-                mep=float(mep_value),
-                price=float(row["Precio"])
+                oficial=float(fx_value),
+                price=float(row["Precio"]),
             )
-
-            cfs = obj.cash_flow()
-            final_payment = round(cfs[-1], 2)
-
-            def safe(fn):
-                try:
-                    return fn()
-                except Exception:
-                    return np.nan
+            cfs  = b.cash_flow()
+            pago = round(cfs[-1], 2)
+            irr  = b.xirr()
+            dur  = b.duration()
+            mdur = b.modified_duration()
 
             return pd.Series({
-                "Pago": final_payment,
-                "TIREA": safe(obj.xirr),           # % anual efectiva
-                "Dur": safe(obj.duration),         # años (Macaulay)
-                "Mod Dur": safe(obj.modified_duration)
+                "Pago": pago,
+                "TIREA": irr,
+                "Duration": dur,
+                "Modified Duration": mdur,
             })
         except Exception:
-            return pd.Series({"Pago": np.nan, "TIREA": np.nan, "Dur": np.nan, "Mod Dur": np.nan})
+            return pd.Series({"Pago": np.nan,"TIREA": np.nan,"Duration": np.nan,"Modified Duration": np.nan})
 
-    df_metrics = df_spec.join(df_spec.apply(compute_metrics, axis=1))
+    df_metrics = df_spec.join(df_spec.apply(compute, axis=1))
 
-    # 4) Días al vencimiento
     if today is None:
         today = pd.Timestamp.today().normalize()
     df_metrics["Días al Vencimiento"] = (df_metrics["Vencimiento"] - today).dt.days.clip(lower=0)
 
-    # 5) Order / presentation: put 'Tipo' after 'Ticker' and format date dd/mm/yy
-    pos = df_metrics.columns.get_loc("Ticker") + 1
-    if "Tipo" in df_metrics.columns:
-        col = df_metrics.pop("Tipo")
-        df_metrics.insert(pos, "Tipo", col)
+    # formato fecha y orden
+    df_metrics_show = df_metrics.copy()
+    df_metrics_show["Vencimiento"] = pd.to_datetime(df_metrics_show["Vencimiento"], errors="coerce").dt.strftime("%d/%m/%y")
 
-    # Make a copy for display with formatted date
-    df_show = df_metrics.copy()
-    if "Vencimiento" in df_show.columns:
-        df_show["Vencimiento"] = pd.to_datetime(df_show["Vencimiento"], errors="coerce").dt.strftime("%d/%m/%y")
+    keep = ["Ticker","Tipo","Vencimiento","Precio","Pago","TIREA","Duration","Modified Duration","Días al Vencimiento"]
+    df_metrics_show = df_metrics_show[[c for c in keep if c in df_metrics_show.columns]]
 
-    # Keep only the requested columns (and in your desired order)
-    keep_cols = ["Ticker", "Tipo", "Vencimiento", "Precio", "Pago", "TIREA", "Dur", "Mod Dur", "Días al Vencimiento"]
-    df_show = df_show[[c for c in keep_cols if c in df_show.columns]]
+    # redondeos
+    for c in ["Precio","Pago","TIREA","Duration","Modified Duration"]:
+        if c in df_metrics_show.columns:
+            df_metrics_show[c] = pd.to_numeric(df_metrics_show[c], errors="coerce").round(2)
 
-    return df_show
+    return df_metrics_show
 
 
 # =========================
@@ -2233,206 +2646,35 @@ LECAPS_ROWS = [
     ("TTD26","15/12/2026","29/01/2025",2.14, "Fija"),
 ]
 
-# -------------------------------------------------
-# Traigo el CER
-# -------------------------------------------------
-# ===== 1) Fetch robusto con cache =====
+tamar_rows = [("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
+              ("M16E6","16/1/2026","18/08/2025",tamar_tem_m16e6, "TAMAR"),
+              ("M27F6","27/2/2026","29/08/2025",tamar_tem_m27f6, "TAMAR"),
+    ("TTM26","16/3/2026","29/1/2025", tamar_tem, "TAMAR"),
+    ("TTJ26","30/6/2026","29/1/2025",tamar_tem, "TAMAR"),
+    ("TTS26","15/9/2026","29/01/2025",tamar_tem, "TAMAR"),
+    ("TTD26","15/12/2026","29/01/2025",tamar_tem, "TAMAR"),
+]
 
-@st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
-def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
+cer_rows = [
+    ("TZXO5", "31/10/2025", "31/10/2024", 480.2, "CER"),
+    ("TZXD5", "15/12/2025", "15/3/2024", 271.0, "CER"),
+    ("TZXM6", "31/3/2026",  "30/4/2024", 337.0, "CER"),
+    ("TZX26", "30/6/2026",  "1/2/2024",  200.4, "CER"),
+    ("TZXO6", "30/10/2026", "31/10/2024",480.2, "CER"),
+    ("TZXD6", "15/12/2026", "15/3/2024", 271.0, "CER"),
+    ("TZXM7", "31/3/2027",  "20/5/2024", 361.3, "CER"),
+    ("TZX27", "30/6/2027",  "1/2/2024",  200.4, "CER"),
+    ("TZXD7", "15/12/2027", "15/3/2024", 271.0, "CER"),
+    ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER"),
+]
 
+dlk_rows = [
+    ("D31O5", "10/07/2025", "31/10/2025", "Dolar Linked"),
+    ("TZVD5", "01/07/2024", "15/12/2025", "Dolar Linked"),
+    ("D16E6", "28/04/2025", "16/01/2026", "Dolar Linked"),
+    ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked")
+]
 
-    base = "https://api.bcra.gob.ar/estadisticas"
-    version = "v4.0"
-    url = f"{base}/{version}/monetarias/{series_id}"
-
-    session = requests.Session()
-    retries = Retry(
-        total=5,
-        backoff_factor=0.5,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET"])
-    )
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-
-    # 🔒 usar bundle de certificados confiables
-    session.verify = certifi.where()
-
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"
-    }
-
-    try:
-        r = session.get(url, timeout=20, headers=headers)
-        r.raise_for_status()
-        js = r.json()
-    except SSLError as e:
-        # ⚠️ fallback inseguro: solo si la validación SSL falla
-        try:
-            st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
-        except Exception:
-            pass  # por si no estás en Streamlit en este contexto
-        r = session.get(url, timeout=20, headers=headers, verify=False)
-        r.raise_for_status()
-        js = r.json()
-
-    # Validación básica del schema
-    if "results" not in js or not js["results"]:
-        raise ValueError("Respuesta sin 'results' o vacía del BCRA.")
-    if "detalle" not in js["results"][0]:
-        raise ValueError("No se encontró 'detalle' en results[0].")
-
-    df = pd.DataFrame(js["results"][0]["detalle"])
-    df = (
-        df[["fecha", "valor"]]
-        .assign(
-            fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"),
-            valor=lambda d: pd.to_numeric(d["valor"], errors="coerce"),
-        )
-        .dropna(subset=["fecha", "valor"])
-        .sort_values("fecha")
-        .reset_index(drop=True)
-    )
-    return df
-
-# ===== 2) Días hábiles: usa QuantLib si está disponible; si no, fallback Mon–Fri =====
-def last_business_day_arg(lag_business_days: int = 10) -> date:
-    # Intento con QuantLib (calendario Argentina Merval)
-    try:
-        import QuantLib as ql
-        cal = ql.Argentina(ql.Argentina.Merval)
-
-        qd = ql.Date.todaysDate() + 1  # asumiendo liquidación T+1
-        # retrocedo 'lag_business_days' días hábiles
-        count = 0
-        while count < lag_business_days:
-            qd = qd - 1
-            if cal.isBusinessDay(qd):
-                count += 1
-        return date(qd.year(), qd.month(), qd.dayOfMonth())
-
-    except Exception:
-        # Fallback simple: cuenta solo Mon–Fri (sin feriados)
-        # Si te interesa feriados reales sin QuantLib, considera 'workalendar'
-        d = datetime.utcnow().date() + timedelta(days=1)
-        count = 0
-        while count < lag_business_days:
-            d = d - timedelta(days=1)
-            if d.weekday() < 5:  # 0=Mon ... 4=Fri
-                count += 1
-        return d
-
-def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
-    # Filtra hasta target (incluye ese día)
-    sel = df[df["fecha"].dt.date <= target_day]
-    if sel.empty:
-        raise ValueError("No hay datos de CER previos a la fecha objetivo.")
-    return float(sel.iloc[-1]["valor"])
-
-# -----------------------------------------------------------
-# TAMAR (robusto con retries y fallback SSL)
-# -----------------------------------------------------------
-# === Fetch TAMAR (igual robusto que CER) ===
-@st.cache_data(ttl=60*60*12, show_spinner=False)
-def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
-
-
-    base = "https://api.bcra.gob.ar/estadisticas"
-    version = "v4.0"
-    url = f"{base}/{version}/monetarias/{series_id}"
-
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=0.5,
-                    status_forcelist=(429,500,502,503,504),
-                    allowed_methods=frozenset(["GET"]))
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-    session.verify = certifi.where()
-
-    headers = {"Accept":"application/json","User-Agent":"Mateo-Streamlit/1.0 (+contacto)"}
-    try:
-        r = session.get(url, timeout=20, headers=headers, verify = False)
-        r.raise_for_status()
-        js = r.json()
-    except SSLError as e:
-        try: st.warning(f"Problema de certificado SSL ({e}). Reintentando sin verificación…")
-        except Exception: pass
-        r = session.get(url, timeout=20, headers=headers, verify=False)
-        r.raise_for_status()
-        js = r.json()
-
-    if "results" not in js or not js["results"] or "detalle" not in js["results"][0]:
-        raise ValueError("Respuesta inválida del BCRA.")
-
-    df = pd.DataFrame(js["results"][0]["detalle"])[["fecha","valor"]]
-    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
-    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
-    df = df.dropna(subset=["fecha","valor"]).sort_values("fecha").reset_index(drop=True)
-    return df
-
-def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) -> pd.Timestamp:
-    anchor = pd.Timestamp(anchor)
-    pos = idx.searchsorted(anchor, side="right") - 1
-    if pos < 0: pos = 0
-    pos_n = max(pos - n, 0)
-    return idx[pos_n]
-
-# === Uso (una sola vez) ===
-try:
-    df_tamar_raw = fetch_tamar_df(44)
-except Exception as e:
-    st.error(f"No se pudo obtener TAMAR del BCRA: {e}")
-    df_tamar_raw = pd.DataFrame()
-
-if df_tamar_raw.empty:
-    st.info("Sin datos TAMAR disponibles por ahora.")
-else:
-    # % NA -> decimal
-    df_tamar = (
-        df_tamar_raw
-        .rename(columns={"valor": "tamar_na_pct"})
-        .assign(tamar_na_dec=lambda d: d["tamar_na_pct"].apply(lambda x: x/100.0 if x is not None else np.nan))
-        .set_index("fecha")
-        .sort_index()
-    )
-
-    idx    = df_tamar.index
-    today  = pd.Timestamp.today().normalize()
-    jan29  = pd.Timestamp(year=today.year, month=1, day=29)  # duales
-    ago18  = pd.Timestamp(year=today.year, month=8, day=18)  # M10N5 / M16E6
-    ago29  = pd.Timestamp(year=today.year, month=8, day=29)  # M27F6
-
-    start        = rows_before_label(idx, jan29,  9)
-    start_m10n5  = rows_before_label(idx, ago18,  9)
-    start_m16e6  = rows_before_label(idx, ago18,  9)
-    start_m27f6  = rows_before_label(idx, ago29,  9)
-    end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
-
-    s = "tamar_na_dec"
-    tamar_window         = df_tamar.loc[start:end, s]
-    tamar_window_m10n5   = df_tamar.loc[start_m10n5:end, s]
-    tamar_window_m16e6   = df_tamar.loc[start_m16e6:end, s]
-    tamar_window_m27f6   = df_tamar.loc[start_m27f6:end, s]
-
-    tamar_avg_na       = float(tamar_window.mean())
-    tamar_avg_na_m10n5 = float(tamar_window_m10n5.mean()) + 0.06   # +6pp -> +0.06 en decimal
-    tamar_avg_na_m16e6 = float(tamar_window_m16e6.mean()) + 0.075  # +7.5pp
-    tamar_avg_na_m27f6 = float(tamar_window_m27f6.mean()) + 0.015  # +1.5pp
-
-    # (1 + r_na * 32/365) ^ (365/32) -> EA ; luego ^(1/12) - 1 -> TEM
-    def na_avg_to_tem(avg_na_dec: float) -> float:
-        return ((1 + avg_na_dec * 32/365)**(365/32))**(1/12) - 1
-
-    tamar_tem       = na_avg_to_tem(tamar_avg_na)
-    tamar_tem_m10n5 = na_avg_to_tem(tamar_avg_na_m10n5)
-    tamar_tem_m16e6 = na_avg_to_tem(tamar_avg_na_m16e6)
-    tamar_tem_m27f6 = na_avg_to_tem(tamar_avg_na_m27f6)
-
-    # último valor observado (<= hoy)
-    tamar_hoy = float(df_tamar.loc[df_tamar.index <= today, "tamar_na_pct"].iloc[-1])
-
-    # Si después lo llevás a build_lecaps_metrics (que espera %), recordá multiplicar por 100:
-    # ej: TEM_% = tamar_tem * 100.0
 # =========================
 # App UI
 # =========================
@@ -3095,108 +3337,80 @@ def main():
                 )
                 st.plotly_chart(fig_fx, width='stretch')
              
+    # =========================
+    # Sección: Otros
+    # =========================
     elif page == "Otros":
         st.title("Otros: CER / TAMAR / DLK")
     
-        # -----------------------------
-        # 0) Datos base (precios, CER, MEP)
-        # -----------------------------
+        # ---------- Datos base ----------
         df_all_norm = normalize_market_df(df_all)
     
-        # CER t - 10 hábiles (usamos tus helpers cacheados)
+        # CER t-10 hábiles
         try:
             df_cer_series = fetch_cer_df(30)
             target_cer = last_business_day_arg(10)
             cer_final = cer_at_or_before(df_cer_series, target_cer)
         except Exception as e:
-            st.warning(f"No se pudo obtener CER (BCRA). Uso CER_final=100 por fallback. Detalle: {e}")
+            st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
             cer_final = 100.0
     
-        # MEP por defecto (si tenés df_mep)
+        # Oficial BCRA (serie 5) t-1
         try:
-            if isinstance(df_mep, pd.DataFrame) and not df_mep.empty:
-                mep_value = float(
-                    df_mep.loc[df_mep["ticker"].astype(str).str.upper() == "AL30", "close"].iloc[0]
-                )
-            else:
-                mep_value = 1000.0
-        except Exception:
-            mep_value = 1000.0
+            df_of = fetch_oficial_df(5)
+            t_minus_1 = (datetime.today() - timedelta(days=1)).date()
+            oficial_t1 = float(df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"].iloc[-1])
+            st.caption(f"Tipo de cambio oficial (BCRA, serie 5) t-1: {oficial_t1:,.2f}")
+        except Exception as e:
+            st.warning(f"No se pudo leer Oficial (serie 5) t-1. Detalle: {e}")
+            oficial_t1 = np.nan
     
-        # -----------------------------
-        # 1) CER: Bonos tipo TX.. / DICP / CUAP (clase cer_bonos)
-        # -----------------------------
-        def _px_bid(sym): 
-            try: return get_price_for_symbol(df_all_norm, sym, prefer="px_bid")
-            except: return np.nan
+        # ---------- CER Bonos (objetos) ----------
+        def _px_bid(sym):
+            try:
+                return float(get_price_for_symbol(df_all_norm, sym, prefer="px_bid"))
+            except Exception:
+                return np.nan
     
-        # Instancias (ajustá cer_inicial / fechas si hace falta)
         tx25 = cer_bonos(
-            name="TX25",
-            cer_final=cer_final,
-            cer_inicial=46.20846297,
-            start_date=datetime(2022,11,9),
-            end_date=datetime(2025,11,9),
-            payment_frequency=6,
-            amortization_dates=["2025-11-09"],
-            amortizations=[100],
-            rate=1.8,
-            price=_px_bid("TX25"),
-            fr=2,
+            name="TX25", cer_final=cer_final, cer_inicial=46.20846297,
+            start_date=datetime(2022, 11, 9), end_date=datetime(2025, 11, 9),
+            payment_frequency=6, amortization_dates=["2025-11-09"], amortizations=[100],
+            rate=1.8, price=_px_bid("TX25"), fr=2,
         )
         tx26 = cer_bonos(
-            name="TX26",
-            cer_final=cer_final,
-            cer_inicial=22.5439510895903,
-            start_date=datetime(2020,11,9),
-            end_date=datetime(2026,11,9),
+            name="TX26", cer_final=cer_final, cer_inicial=22.5439510895903,
+            start_date=datetime(2020, 11, 9), end_date=datetime(2026, 11, 9),
             payment_frequency=6,
             amortization_dates=["2024-11-09","2025-05-09","2025-11-09","2026-05-09","2026-11-09"],
             amortizations=[20,20,20,20,20],
-            rate=2.0,
-            price=_px_bid("TX26"),
-            fr=2,
+            rate=2.0, price=_px_bid("TX26"), fr=2,
         )
         tx28 = cer_bonos(
-            name="TX28",
-            cer_final=cer_final,
-            cer_inicial=22.5439510895903,
-            start_date=datetime(2020,11,9),
-            end_date=datetime(2028,11,9),
+            name="TX28", cer_final=cer_final, cer_inicial=22.5439510895903,
+            start_date=datetime(2020, 11, 9), end_date=datetime(2028, 11, 9),
             payment_frequency=6,
             amortization_dates=[
                 "2024-05-09","2024-11-09","2025-05-09","2025-11-09","2026-05-09",
                 "2026-11-09","2027-05-09","2027-11-09","2028-05-09","2028-11-09",
             ],
-            amortizations=[10]*10,
-            rate=2.25,
-            price=_px_bid("TX28"),
-            fr=2,
+            amortizations=[10]*10, rate=2.25, price=_px_bid("TX28"), fr=2,
         )
         dicp = cer_bonos(
-            name="DICP",
-            cer_final=cer_final * (1 + 0.26994),
-            cer_inicial=1.45517953387336,
-            start_date=datetime(2003,12,31),
-            end_date=datetime(2033,12,31),
+            name="DICP", cer_final=cer_final*(1+0.26994), cer_inicial=1.45517953387336,
+            start_date=datetime(2003,12,31), end_date=datetime(2033,12,31),
             payment_frequency=6,
-            amortization_dates=[  # 20 cuotas de 5%
+            amortization_dates=[  # 20×5%
                 "2024-06-30","2024-12-31","2025-06-30","2025-12-31","2026-06-30",
                 "2026-12-31","2027-06-30","2027-12-31","2028-06-30","2028-12-31",
                 "2029-06-30","2029-12-31","2030-06-30","2030-12-31","2031-06-30",
                 "2031-12-31","2032-06-30","2032-12-31","2033-06-30","2033-12-31",
             ],
-            amortizations=[5]*20,
-            rate=5.83,
-            price=_px_bid("DICP"),
-            fr=2,
+            amortizations=[5]*20, rate=5.83, price=_px_bid("DICP"), fr=2,
         )
         cuap = cer_bonos(
-            name="CUAP",
-            cer_final=cer_final * (1 + 0.388667433600987),
-            cer_inicial=1.45517953387336,
-            start_date=datetime(2003,12,31),
-            end_date=datetime(2045,12,31),
+            name="CUAP", cer_final=cer_final*(1+0.388667433600987), cer_inicial=1.45517953387336,
+            start_date=datetime(2003,12,31), end_date=datetime(2045,12,31),
             payment_frequency=6,
             amortization_dates=[
                 "2036-06-30","2036-12-31","2037-06-30","2037-12-31","2038-06-30",
@@ -3204,18 +3418,11 @@ def main():
                 "2041-06-30","2041-12-31","2042-06-30","2042-12-31","2043-06-30",
                 "2043-12-31","2044-06-30","2044-12-31","2045-06-30","2045-12-31",
             ],
-            amortizations=[5]*20,
-            rate=3.31,
-            price=_px_bid("CUAP"),
-            fr=2,
+            amortizations=[5]*20, rate=3.31, price=_px_bid("CUAP"), fr=2,
         )
+        cer_bonos_objs = [tx25, tx26, tx28, dicp, cuap]
     
-        bonds_cer_obj = [tx25, tx26, tx28, dicp, cuap]
-        df_metrics_cer_bonos = _summarize_cer_bonds(bonds_cer_obj)
-    
-        # -----------------------------
-        # 2) CER: Letras/BONCER (clase cer + lista que ya usabas)
-        # -----------------------------
+        # ---------- CER Letras (rows → objetos) ----------
         cer_rows = [
             ("TZXO5", "31/10/2025", "31/10/2024", 480.2, "CER"),
             ("TZXD5", "15/12/2025", "15/3/2024", 271.0, "CER"),
@@ -3228,170 +3435,166 @@ def main():
             ("TZXD7", "15/12/2027", "15/3/2024", 271.0, "CER"),
             ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER"),
         ]
-        df_metrics_cer_letras = build_cer_rows_metrics(cer_rows, df_all_norm, cer_final)
-        # Normalizo formato de fecha
-        if "Vencimiento" in df_metrics_cer_letras.columns:
-            df_metrics_cer_letras["Vencimiento"] = pd.to_datetime(df_metrics_cer_letras["Vencimiento"], errors="coerce").dt.strftime("%d/%m/%y")
-    
-        # Objetos 'cer' para conversor Precio↔Rendimiento
-        obj_cer_letras = {}
-        for tk, vto, emi, cer_ini, _tipo in cer_rows:
+        cer_letras_objs = []
+        for tk, vto, emi, cer_ini, _ in cer_rows:
             try:
                 price = get_price_for_symbol(df_all_norm, tk, prefer="px_ask")
             except Exception:
                 price = np.nan
             try:
-                obj_cer_letras[tk] = cer(
-                    name=tk,
-                    start_date=_parse_dt_dmy(emi),
-                    end_date=_parse_dt_dmy(vto),
-                    cer_final=float(cer_final),
-                    cer_inicial=float(cer_ini),
-                    price=float(price),
-                    exit_yield_date=datetime.today(),   # no usado por tus métodos actuales
-                    exit_yield=0.0
+                cer_letras_objs.append(
+                    cer(
+                        name=tk,
+                        start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
+                        end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
+                        cer_final=float(cer_final),
+                        cer_inicial=float(str(cer_ini).replace(",", ".")),
+                        price=float(price),
+                        exit_yield_date=datetime.today(),
+                        exit_yield=0.0
+                    )
                 )
             except Exception:
                 pass
     
-        # -----------------------------
-        # 3) DLK: Dólar Linked (clase dlk + tabla)
-        # -----------------------------
+        # ---------- DLK (rows → objetos; usa oficial t-1) ----------
         dlk_rows = [
-            ("D31O5", "10/07/2025", "31/10/2025", "Dolar Linked"),
-            ("TZVD5", "01/07/2024", "15/12/2025", "Dolar Linked"),
-            ("D16E6", "28/04/2025", "16/01/2026", "Dolar Linked"),
-            ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked"),
+            ("D31O5", "10/07/2025", "31/10/2025", "Dólar Linked"),
+            ("TZVD5", "01/07/2024", "15/12/2025", "Dólar Linked"),
+            ("D16E6", "28/04/2025", "16/01/2026", "Dólar Linked"),
+            ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
         ]
-        df_metrics_dlk = build_dlk_metrics(dlk_rows, df_all_norm, mep_value=mep_value)
-    
-        # Objetos 'dlk' para conversor
-        obj_dlk = {}
-        for tk, vto, emi, _tipo in dlk_rows:
+        dlk_objs = []
+        for tk, emi, vto, _ in dlk_rows:
             try:
                 price = get_price_for_symbol(df_all_norm, tk, prefer="px_ask")
             except Exception:
                 price = np.nan
             try:
-                obj_dlk[tk] = dlk(
-                    name=tk,
-                    start_date=_parse_dt_dmy(emi),
-                    end_date=_parse_dt_dmy(vto),
-                    mep=float(mep_value),
-                    price=float(price),
+                dlk_objs.append(
+                    dlk(
+                        name=tk,
+                        start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
+                        end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
+                        oficial=float(oficial_t1),   # ⬅ si tu clase aún usa 'mep', cambiar a mep=float(oficial_t1)
+                        price=float(price),
+                    )
                 )
             except Exception:
                 pass
     
-        # -----------------------------
-        # 4) TAMAR (si tenés las TEM definidas)
-        # -----------------------------
+        # ---------- TAMAR (rows → objetos lecaps) ----------
+        # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
             tamar_rows = [
                 ("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
                 ("M16E6","16/1/2026","18/08/2025",tamar_tem_m16e6, "TAMAR"),
                 ("M27F6","27/2/2026","29/08/2025",tamar_tem_m27f6, "TAMAR"),
-                ("TTM26","16/3/2026","29/1/2025", tamar_tem, "TAMAR"),
-                ("TTJ26","30/6/2026","29/1/2025", tamar_tem, "TAMAR"),
-                ("TTS26","15/9/2026","29/01/2025",tamar_tem, "TAMAR"),
-                ("TTD26","15/12/2026","29/01/2025",tamar_tem, "TAMAR"),
+                ("TTM26","16/3/2026","29/1/2025", tamar_tem,        "TAMAR"),
+                ("TTJ26","30/6/2026","29/1/2025", tamar_tem,        "TAMAR"),
+                ("TTS26","15/9/2026","29/01/2025",tamar_tem,        "TAMAR"),
+                ("TTD26","15/12/2026","29/01/2025",tamar_tem,       "TAMAR"),
             ]
-            df_tamar = build_lecaps_metrics(tamar_rows, df_all_norm)
-            le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm)
-        except Exception as e:
-            df_tamar = pd.DataFrame()
-            le_map_tamar = {}
-            st.info("No se pudo armar TAMAR (faltan TEM o datos).")
+            le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm)  # {ticker: lecaps}
+            tamar_objs = list(le_map_tamar.values())
+        except Exception:
+            tamar_objs = []
     
-        # -----------------------------
-        # 5) Panel de Métricas
-        # -----------------------------
-        st.subheader("Métricas")
-        tab_cer_bonos, tab_cer_letras, tab_dlk, tab_tamar = st.tabs(["CER Bonos","CER Letras","DLK","TAMAR"])
+        # ---------- Panel de tablas ----------
+        st.subheader("Métricas por instrumento")
+        tab_cer_bonos, tab_cer_letras, tab_dlk, tab_tamar = st.tabs(["CER Bonos", "CER Letras", "DLK", "TAMAR"])
     
         with tab_cer_bonos:
-            st.dataframe(df_metrics_cer_bonos, width='stretch', hide_index=True)
+            df_tbl = _summarize_objects_table(cer_bonos_objs, "CER Bono")
+            st.dataframe(df_tbl, width='stretch', hide_index=True)
     
         with tab_cer_letras:
-            cols = [c for c in ["Ticker","Tipo","Vencimiento","Precio","CER_inicial","Pago","TIREA","TNA 30","TEM","Dur","Mod Dur","Días al Vencimiento"] if c in df_metrics_cer_letras.columns]
-            st.dataframe(df_metrics_cer_letras[cols], width='stretch', hide_index=True)
+            df_tbl = _summarize_objects_table(cer_letras_objs, "CER Letra")
+            st.dataframe(df_tbl, width='stretch', hide_index=True)
     
         with tab_dlk:
-            cols = [c for c in ["Ticker","Tipo","Vencimiento","Precio","Pago","TIREA","Dur","Mod Dur","Días al Vencimiento"] if c in df_metrics_dlk.columns]
-            st.dataframe(df_metrics_dlk[cols], width='stretch', hide_index=True)
+            df_tbl = _summarize_objects_table(dlk_objs, "Dólar Linked")
+            st.dataframe(df_tbl, width='stretch', hide_index=True)
     
         with tab_tamar:
-            if not df_tamar.empty:
-                st.dataframe(df_tamar, width='stretch', hide_index=True)
+            if tamar_objs:
+                df_tbl = _summarize_objects_table(tamar_objs, "TAMAR")
+                st.dataframe(df_tbl, width='stretch', hide_index=True)
             else:
-                st.info("Sin datos TAMAR.")
+                st.info("Sin datos TAMAR o TEM no disponible.")
     
         st.divider()
     
-        # -----------------------------
-        # 6) Precio ↔ Rendimiento (todos los “Otros”)
-        # -----------------------------
+        # ---------- Conversor Precio ↔ Rendimiento ----------
         st.subheader("Precio ↔ Rendimiento")
     
-        # Mapa de objetos disponibles para conversor
-        obj_map = {b.name: b for b in bonds_cer_obj}
-        obj_map.update(obj_cer_letras)
-        obj_map.update(obj_dlk)
-        obj_map.update(le_map_tamar)
-    
+        # Mapa para conversor
+        obj_map = {o.name: o for o in cer_bonos_objs + cer_letras_objs + dlk_objs + tamar_objs}
         if not obj_map:
             st.info("No hay instrumentos construidos.")
         else:
             tickers_any = sorted(obj_map.keys())
-    
-            tab_px2y, tab_y2px = st.tabs(["Precio → TIR", "TIR → Precio"])
+            tab_px2y, tab_y2px = st.tabs(["Precio → Métricas", "Rendimiento → Métricas"])
     
             with tab_px2y:
                 bname = st.selectbox("Instrumento", tickers_any, key="otros_px2y")
                 prc_in = st.number_input("Precio (clean)", min_value=0.0, step=0.1, value=0.0, key="otros_px")
-                if st.button("Calcular TIR", key="btn_otros_px2y"):
+                if st.button("Calcular", key="btn_otros_px2y"):
                     b = obj_map[bname]
-                    y = _any_yield_from_price(b, prc_in)
-                    if not np.isfinite(y):
-                        st.error("No se pudo calcular la TIR para ese precio.")
-                    else:
-                        # métricas complementarias
-                        tna30, tem = _tna30_tem_from_irr_ea(y)
-                        # duration/mod.duration con ese precio
-                        old = b.price
-                        try:
-                            b.price = prc_in
-                            dur = b.duration()
-                            md  = b.modified_duration()
-                        finally:
-                            b.price = old
-    
-                        df_one = pd.DataFrame([{
-                            "Ticker": bname,
-                            "Precio": prc_in,
-                            "TIR EA (%)": y,
-                            "TNA 30 (%)": tna30,
-                            "TEM (%)": tem,
-                            "Duration (años)": dur,
-                            "Modified Duration (años)": md,
-                        }])
-                        for c in df_one.columns[1:]:
-                            df_one[c] = pd.to_numeric(df_one[c], errors="coerce").round(2)
-                        st.dataframe(df_one, width='stretch', hide_index=True)
+                    # calcular TIR con ese precio
+                    old = getattr(b, "price", np.nan)
+                    try:
+                        b.price = prc_in
+                        irr = float(b.xirr())
+                        dur = float(b.duration())
+                        md  = float(b.modified_duration())
+                        pago_final = _pago_final_from_obj(b)
+                        dias = _dias_al_vto_from_obj(b)
+                        vto  = _fmt_date(getattr(b, "end_date", None))
+                    finally:
+                        b.price = old
+                    df_one = pd.DataFrame([{
+                        "Ticker": bname,
+                        "Vencimiento": vto,
+                        "Días al vencimiento": dias,
+                        "Precio": round(prc_in, 2),
+                        "TIREA": round(irr, 2) if np.isfinite(irr) else np.nan,
+                        "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
+                        "MD": round(md, 2) if np.isfinite(md) else np.nan,
+                        "Pago Final": pago_final,
+                    }])
+                    st.dataframe(df_one, width='stretch', hide_index=True)
     
             with tab_y2px:
                 bname2 = st.selectbox("Instrumento", tickers_any, key="otros_y2px")
                 yld_in = st.number_input("TIR EA (%)", min_value=-99.0, step=0.1, value=0.0, key="otros_y")
-                if st.button("Calcular Precio", key="btn_otros_y2px"):
+                if st.button("Calcular", key="btn_otros_y2px"):
                     b2 = obj_map[bname2]
-                    p = _any_price_from_yield(b2, yld_in)
-                    if not np.isfinite(p):
-                        st.error("No se pudo calcular el precio para esa TIR.")
-                    else:
-                        st.success(f"Precio clean: **{p:.2f}**")
-                        # chequeo inverso
-                        y_check = _any_yield_from_price(b2, p)
-                        st.caption(f"Chequeo: TIR con ese precio = **{y_check:.2f}%**")
+                    # precio implícito: usando tu helper genérico
+                    p_impl = _any_price_from_yield(b2, yld_in)
+                    # métricas a ese precio
+                    old = getattr(b2, "price", np.nan)
+                    try:
+                        b2.price = p_impl if np.isfinite(p_impl) else old
+                        irr = float(b2.xirr())
+                        dur = float(b2.duration())
+                        md  = float(b2.modified_duration())
+                        pago_final = _pago_final_from_obj(b2)
+                        dias = _dias_al_vto_from_obj(b2)
+                        vto  = _fmt_date(getattr(b2, "end_date", None))
+                    finally:
+                        b2.price = old
+                    df_one = pd.DataFrame([{
+                        "Ticker": bname2,
+                        "Vencimiento": vto,
+                        "Días al vencimiento": dias,
+                        "Precio implícito": round(p_impl, 2) if np.isfinite(p_impl) else np.nan,
+                        "TIREA": round(irr, 2) if np.isfinite(irr) else np.nan,
+                        "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
+                        "MD": round(md, 2) if np.isfinite(md) else np.nan,
+                        "Pago Final": pago_final,
+                    }])
+                    st.dataframe(df_one, width='stretch', hide_index=True)
 
 
 if __name__ == "__main__":
