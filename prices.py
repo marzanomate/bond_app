@@ -3611,7 +3611,7 @@ def main():
         # =========================
         # Curvas: TIREA vs MD
         # =========================
-        st.subheader("Curvas (TIREA vs MD)")
+        st.subheader("Curvas")
         
         # --- helpers para armar DF y graficar ---
         def _fmt_date(d):
