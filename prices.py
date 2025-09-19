@@ -872,7 +872,7 @@ class lecaps:
     # ==========================
     def price_from_irr(self, irr_pct: float) -> float:
         """
-        Dado una TIR efectiva anual en %, devuelve el precio (clean) que la
+        Dado una TIR efectiva anual en %, devuelve el Precio que la
         implica para este instrumento (2 flujos).
         """
         try:
@@ -3033,7 +3033,7 @@ def main():
                     tickers_any = sorted(list(le_map.keys()) + list(bcp_map.keys()))
                     bname = st.selectbox("Elegí instrumento", tickers_any, key="any_px2y")
                     prc_in = st.number_input(
-                        "Precio (clean) → TIR e.a. (%)", min_value=0.0, step=0.1, value=0.0, key="any_px"
+                        "Precio → TIR e.a. (%)", min_value=0.0, step=0.1, value=0.0, key="any_px"
                     )
         
                     if st.button("Calcular TIR", key="btn_any_px2y"):
@@ -3104,7 +3104,7 @@ def main():
                 tickers2_any = sorted(list(le_map.keys()) + list(bcp_map.keys()))
                 bname2 = st.selectbox("Elegí instrumento", tickers2_any, key="any_y2px")
                 yld_in = st.number_input(
-                    "TIR e.a. (%) → Precio (clean)", min_value=-99.0, step=0.1, value=0.0, key="any_y"
+                    "TIR e.a. (%) → Precio", min_value=-99.0, step=0.1, value=0.0, key="any_y"
                 )
     
                 if st.button("Calcular Precio", key="btn_any_y2px"):
@@ -3550,7 +3550,7 @@ def main():
     
             with tab_px2y:
                 bname = st.selectbox("Instrumento", tickers_any, key="otros_px2y")
-                prc_in = st.number_input("Precio (clean)", min_value=0.0, step=0.1, value=0.0, key="otros_px")
+                prc_in = st.number_input("Precio", min_value=0.0, step=0.1, value=0.0, key="otros_px")
                 if st.button("Calcular", key="btn_otros_px2y"):
                     b = obj_map[bname]
                     # calcular TIR con ese precio
