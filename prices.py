@@ -31,9 +31,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 st.set_page_config(page_title="Renta Fija Arg", page_icon="💵", layout="wide")
 
-# --- Badge GitHub, fijo junto al "Manage app" ---
-st.sidebar.markdown("**Creador:** [@marzanomate](https://github.com/marzanomate)")
-
 
 def daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires") -> str:
     now = datetime.now(ZoneInfo(tz))
@@ -383,11 +380,10 @@ def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
     nombre = df.get("nombre")
     df["nombre"] = np.where(nombre.notna(), nombre, df["casa"].str.title())
 
-    out = df[["nombre","compra","venta","fecha"]].rename(columns={
+    out = df[["nombre","compra","venta"]].rename(columns={
         "nombre":"Dólar",
         "compra":"Compra",
-        "venta":"Venta",
-        "fecha":"Actualización",
+        "venta":"Venta"
     })
     # formato prolijo
     for c in ["Compra","Venta"]:
@@ -2784,7 +2780,7 @@ dlk_rows = [
 
 # --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
 def render_sidebar_info():
-    GITHUB_USER = "tu-usuario"  # <-- cambialo
+    GITHUB_USER = "marzanomate"  # <-- cambialo
 
     with st.sidebar:
         # Creador
@@ -2802,7 +2798,7 @@ def render_sidebar_info():
         )
 
         # Si querés refresco 1 vez por día a las 10:30
-        dkey = daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires")
+        dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
         rp = fetch_riesgo_pais(daily_key=dkey)
         fx = fetch_dolares(daily_key=dkey)
 
