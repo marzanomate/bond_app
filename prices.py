@@ -30,7 +30,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
 
-def daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires") -> str:
+def daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires") -> str:
     now = datetime.now(ZoneInfo(tz))
     anchor = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     effective_date = now.date() if now >= anchor else (now - timedelta(days=1)).date()
@@ -3300,7 +3300,7 @@ def main():
     # =========================
     elif page == "Otros":        
         
-        dkey = daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires")
+        dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
         st.title("CER / TAMAR / DLK")
     
         # ---------- Datos base ----------
