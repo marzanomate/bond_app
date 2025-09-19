@@ -2799,6 +2799,7 @@ def render_sidebar_info():
         
         rp = fetch_riesgo_pais()
         fx = fetch_dolares()
+        fx = fx.drop(columns=[c for c in ("key", "fecha") if c in fx.columns])
         
         st.markdown("### Mercado")
         # Riesgo país
