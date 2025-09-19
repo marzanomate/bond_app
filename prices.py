@@ -379,7 +379,7 @@ def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
     # nombre visible: si viene 'nombre' lo usamos; si no, 'casa'
     nombre = df.get("nombre")
     df["nombre"] = np.where(nombre.notna(), nombre, df["casa"].str.title())
-
+    df = df.drop(columns=[c for c in ("key", "fecha") if c in df.columns], errors="ignore")
     out = df[["nombre","compra","venta"]].rename(columns={
         "nombre":"Dólar",
         "compra":"Compra",
@@ -2799,7 +2799,7 @@ def render_sidebar_info():
         
         rp = fetch_riesgo_pais()
         fx = fetch_dolares()
-        fx = fx.drop(columns=[c for c in ("key", "fecha") if c in fx.columns])
+        
         
         st.markdown("### Mercado")
         # Riesgo país
