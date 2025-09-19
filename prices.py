@@ -3607,11 +3607,18 @@ def main():
                         "Pago Final": pago_final,
                     }])
                     st.dataframe(df_one, width='stretch', hide_index=True)
-                    
+
         # =========================
         # Curvas: TIREA vs MD
         # =========================
         st.subheader("Curvas (TIREA vs MD)")
+        
+        # ---- controles de escala ----
+        c1, c2 = st.columns(2)
+        with c1:
+            logx = st.checkbox("Escala log en MD (eje X)", value=False)
+        with c2:
+            logy = st.checkbox("Escala log en TIREA (eje Y, solo > 0)", value=False)
         
         # --- helpers para armar DF y graficar ---
         def _fmt_date(d):
@@ -3625,7 +3632,6 @@ def main():
         def _df_for_plot(objs, tipo_label):
             rows = []
             for o in objs:
-                # Métricas por precio de mercado (tal como están los objetos)
                 try:
                     irr = float(o.xirr())
                 except Exception:
@@ -3645,16 +3651,27 @@ def main():
                     "Vencimiento": vto,
                 })
             df = pd.DataFrame(rows)
-            # nos quedamos con los que tienen ambas métricas válidas
             return df.dropna(subset=["MD", "TIREA"])
         
-        def _plot_curve(df, title):
-            if df.empty:
-                st.info("Sin datos para graficar.")
+        def _plot_curve(df, title, logx=False, logy=False):
+            # filtrar si usamos log (log requiere valores > 0)
+            removed = 0
+            dfp = df.copy()
+            if logx:
+                before = len(dfp)
+                dfp = dfp[dfp["MD"] > 0]
+                removed += before - len(dfp)
+            if logy:
+                before = len(dfp)
+                dfp = dfp[dfp["TIREA"] > 0]
+                removed += before - len(dfp)
+        
+            if dfp.empty:
+                st.info("Sin datos para graficar con la escala seleccionada.")
                 return
-            # scatter con etiquetas
+        
             fig = px.scatter(
-                df.sort_values("MD"),
+                dfp.sort_values("MD"),
                 x="MD", y="TIREA",
                 color="Tipo",
                 text="Ticker",
@@ -3668,8 +3685,12 @@ def main():
                 legend_title="",
                 margin=dict(l=10, r=10, t=60, b=10),
             )
-            fig.update_yaxes(ticksuffix="%")
+            fig.update_xaxes(type="log" if logx else "linear")
+            fig.update_yaxes(type="log" if logy else "linear", ticksuffix="%")
             st.plotly_chart(fig, use_container_width=True)
+        
+            if removed > 0:
+                st.caption(f"({removed} puntos excluidos por escala logarítmica)")
         
         # --- dataframes para cada familia ---
         df_cer_bonos_plot  = _df_for_plot(cer_bonos_objs,  "CER Bono")
@@ -3678,28 +3699,25 @@ def main():
         df_tamar_plot      = _df_for_plot(tamar_objs,      "TAMAR")
         
         # --- tabs de curvas + una combinada ---
-        tab_g_dlk, tab_g_tamar, tab_g_cer_l, tab_g_cer_b, tab_g_all = st.tabs(
-            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "CER"]
+        tab_g_dlk, tab_g_tamar, tab_g_cer_l, tab_g_cer_b, tab_g_cer = st.tabs(
+            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "CER (ambas)"]
         )
         
         with tab_g_dlk:
-            _plot_curve(df_dlk_plot, "Curva DLK — TIREA vs MD")
+            _plot_curve(df_dlk_plot, "Curva DLK — TIREA vs MD", logx=logx, logy=logy)
         
         with tab_g_tamar:
-            _plot_curve(df_tamar_plot, "Curva TAMAR — TIREA vs MD")
+            _plot_curve(df_tamar_plot, "Curva TAMAR — TIREA vs MD", logx=logx, logy=logy)
         
         with tab_g_cer_l:
-            _plot_curve(df_cer_letras_plot, "Curva CER Letras — TIREA vs MD")
+            _plot_curve(df_cer_letras_plot, "Curva CER Letras — TIREA vs MD", logx=logx, logy=logy)
         
         with tab_g_cer_b:
-            _plot_curve(df_cer_bonos_plot, "Curva CER Bonos — TIREA vs MD")
+            _plot_curve(df_cer_bonos_plot, "Curva CER Bonos — TIREA vs MD", logx=logx, logy=logy)
         
-        with tab_g_all:
-            df_all_plot = pd.concat(
-                [df_cer_letras_plot, df_cer_bonos_plot],
-                ignore_index=True
-            )
-            _plot_curve(df_all_plot, "Curva CER-L")            
+        with tab_g_cer:
+            df_all_plot = pd.concat([df_cer_letras_plot, df_cer_bonos_plot], ignore_index=True)
+            _plot_curve(df_all_plot, "Curva CER — TIREA vs MD", logx=logx, logy=logy)
 
 
 if __name__ == "__main__":
