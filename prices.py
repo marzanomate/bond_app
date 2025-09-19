@@ -3679,7 +3679,7 @@ def main():
         
         # --- tabs de curvas + una combinada ---
         tab_g_dlk, tab_g_tamar, tab_g_cer_l, tab_g_cer_b, tab_g_all = st.tabs(
-            ["DLK", "TAMAR", "CER"]
+            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "CER"]
         )
         
         with tab_g_dlk:
