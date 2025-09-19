@@ -3315,7 +3315,7 @@ def main():
     # =========================
     # Sección: Otros
     # =========================
-    elif page == "DLK/CERlTAMAR":        
+    elif page == "Otros":        
         
         dkey = daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires")
         st.title("CER / TAMAR / DLK")
