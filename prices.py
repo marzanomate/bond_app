@@ -2797,11 +2797,6 @@ def render_sidebar_info():
             unsafe_allow_html=True,
         )
 
-        # Si querés refresco 1 vez por día a las 10:30
-        dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
-        rp = fetch_riesgo_pais(daily_key=dkey)
-        fx = fetch_dolares(daily_key=dkey)
-
         st.markdown("### Mercado")
         # Riesgo país
         if np.isfinite(rp.get("valor", np.nan)):
