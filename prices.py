@@ -3607,6 +3607,99 @@ def main():
                         "Pago Final": pago_final,
                     }])
                     st.dataframe(df_one, width='stretch', hide_index=True)
+                    
+        # =========================
+        # Curvas: TIREA vs MD
+        # =========================
+        st.subheader("Curvas (TIREA vs MD)")
+        
+        # --- helpers para armar DF y graficar ---
+        def _fmt_date(d):
+            if d is None:
+                return ""
+            try:
+                return pd.to_datetime(d).strftime("%d/%m/%Y")
+            except Exception:
+                return str(d)
+        
+        def _df_for_plot(objs, tipo_label):
+            rows = []
+            for o in objs:
+                # Métricas por precio de mercado (tal como están los objetos)
+                try:
+                    irr = float(o.xirr())
+                except Exception:
+                    irr = np.nan
+                try:
+                    md = float(o.modified_duration())
+                except Exception:
+                    md = np.nan
+                price = float(getattr(o, "price", np.nan))
+                vto   = _fmt_date(getattr(o, "end_date", None))
+                rows.append({
+                    "Ticker": getattr(o, "name", ""),
+                    "Tipo": tipo_label,
+                    "MD": md,
+                    "TIREA": irr,   # en %
+                    "Precio": price,
+                    "Vencimiento": vto,
+                })
+            df = pd.DataFrame(rows)
+            # nos quedamos con los que tienen ambas métricas válidas
+            return df.dropna(subset=["MD", "TIREA"])
+        
+        def _plot_curve(df, title):
+            if df.empty:
+                st.info("Sin datos para graficar.")
+                return
+            # scatter con etiquetas
+            fig = px.scatter(
+                df.sort_values("MD"),
+                x="MD", y="TIREA",
+                color="Tipo",
+                text="Ticker",
+                hover_data=["Vencimiento", "Precio"],
+                title=title,
+            )
+            fig.update_traces(textposition="top center")
+            fig.update_layout(
+                xaxis_title="MD (años)",
+                yaxis_title="TIREA (%)",
+                legend_title="",
+                margin=dict(l=10, r=10, t=60, b=10),
+            )
+            fig.update_yaxes(ticksuffix="%")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # --- dataframes para cada familia ---
+        df_cer_bonos_plot  = _df_for_plot(cer_bonos_objs,  "CER Bono")
+        df_cer_letras_plot = _df_for_plot(cer_letras_objs, "CER Letra")
+        df_dlk_plot        = _df_for_plot(dlk_objs,        "DLK")
+        df_tamar_plot      = _df_for_plot(tamar_objs,      "TAMAR")
+        
+        # --- tabs de curvas + una combinada ---
+        tab_g_dlk, tab_g_tamar, tab_g_cer_l, tab_g_cer_b, tab_g_all = st.tabs(
+            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "Todas"]
+        )
+        
+        with tab_g_dlk:
+            _plot_curve(df_dlk_plot, "Curva DLK — TIREA vs MD")
+        
+        with tab_g_tamar:
+            _plot_curve(df_tamar_plot, "Curva TAMAR — TIREA vs MD")
+        
+        with tab_g_cer_l:
+            _plot_curve(df_cer_letras_plot, "Curva CER Letras — TIREA vs MD")
+        
+        with tab_g_cer_b:
+            _plot_curve(df_cer_bonos_plot, "Curva CER Bonos — TIREA vs MD")
+        
+        with tab_g_all:
+            df_all_plot = pd.concat(
+                [df_dlk_plot, df_tamar_plot, df_cer_letras_plot, df_cer_bonos_plot],
+                ignore_index=True
+            )
+            _plot_curve(df_all_plot, "Curva Combinada — TIREA vs MD")            
 
 
 if __name__ == "__main__":
