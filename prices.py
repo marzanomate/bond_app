@@ -29,63 +29,47 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
 
+def daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires") -> str:
+    now = datetime.now(ZoneInfo(tz))
+    anchor = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    effective_date = now.date() if now >= anchor else (now - timedelta(days=1)).date()
+    return f"{effective_date.isoformat()}@{hour:02d}{minute:02d}"
+
 # -------------------------------------------------
 # Traigo el CER
 # -------------------------------------------------
 # ===== 1) Fetch robusto con cache =====
 
-@st.cache_data(ttl=60*60*12, show_spinner=False)  # cachea 12 horas
-def fetch_cer_df(series_id: int = 30) -> pd.DataFrame:
-
-
+@st.cache_data(show_spinner=False)
+def fetch_cer_df(series_id: int = 30, daily_key: str = "") -> pd.DataFrame:
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
     url = f"{base}/{version}/monetarias/{series_id}"
 
     session = requests.Session()
-    retries = Retry(
-        total=5,
-        backoff_factor=0.5,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET"])
-    )
+    retries = Retry(total=5, backoff_factor=0.5,
+                    status_forcelist=(429, 500, 502, 503, 504),
+                    allowed_methods=frozenset(["GET"]))
     session.mount("https://", HTTPAdapter(max_retries=retries))
-
-    # 🔒 usar bundle de certificados confiables
     session.verify = certifi.where()
-
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Mateo-Streamlit/1.0 (+contacto)"
-    }
+    headers = {"Accept":"application/json","User-Agent":"Mateo-Streamlit/1.0 (+contacto)"}
 
     try:
         r = session.get(url, timeout=20, headers=headers)
         r.raise_for_status()
         js = r.json()
-    except SSLError as e:
+    except SSLError:
         r = session.get(url, timeout=20, headers=headers, verify=False)
         r.raise_for_status()
         js = r.json()
 
-    # Validación básica del schema
-    if "results" not in js or not js["results"]:
-        raise ValueError("Respuesta sin 'results' o vacía del BCRA.")
-    if "detalle" not in js["results"][0]:
-        raise ValueError("No se encontró 'detalle' en results[0].")
+    if "results" not in js or not js["results"] or "detalle" not in js["results"][0]:
+        raise ValueError("Respuesta inválida del BCRA (CER).")
 
-    df = pd.DataFrame(js["results"][0]["detalle"])
-    df = (
-        df[["fecha", "valor"]]
-        .assign(
-            fecha=lambda d: pd.to_datetime(d["fecha"], errors="coerce"),
-            valor=lambda d: pd.to_numeric(d["valor"], errors="coerce"),
-        )
-        .dropna(subset=["fecha", "valor"])
-        .sort_values("fecha")
-        .reset_index(drop=True)
-    )
-    return df
+    df = pd.DataFrame(js["results"][0]["detalle"])[["fecha","valor"]]
+    df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
+    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
+    return df.dropna().sort_values("fecha").reset_index(drop=True)
 
 # ===== 2) Días hábiles: usa QuantLib si está disponible; si no, fallback Mon–Fri =====
 def last_business_day_arg(lag_business_days: int = 10) -> date:
@@ -127,7 +111,7 @@ def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
 
 # === Fetch TAMAR (igual robusto que CER) ===
 @st.cache_data(ttl=60*60*12, show_spinner=False)
-def fetch_tamar_df(series_id: int = 44) -> pd.DataFrame:
+def fetch_tamar_dfseries_id: int = 44, daily_key: str = "") -> pd.DataFrame:
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
     url = f"{base}/{version}/monetarias/{series_id}"
@@ -229,7 +213,7 @@ else:
 # --------------------------------------------------------
 
 @st.cache_data(ttl=60*60*12, show_spinner=False)
-def fetch_oficial_df(series_id: int = 5) -> pd.DataFrame:
+def fetch_oficial_df(series_id: int = 5, daily_key: str = "") -> pd.DataFrame:
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
     url = f"{base}/{version}/monetarias/{series_id}"
@@ -3331,7 +3315,9 @@ def main():
     # =========================
     # Sección: Otros
     # =========================
-    elif page == "Otros":
+    elif page == "Otros":        
+        
+        dkey = daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires")
         st.title("CER / TAMAR / DLK")
     
         # ---------- Datos base ----------
@@ -3339,7 +3325,7 @@ def main():
     
         # CER t-10 hábiles
         try:
-            df_cer_series = fetch_cer_df(30)
+            df_cer_series = fetch_cer_df(30,  daily_key=dkey)
             target_cer = last_business_day_arg(10)
             cer_final = cer_at_or_before(df_cer_series, target_cer)
         except Exception as e:
@@ -3348,7 +3334,7 @@ def main():
     
         # Oficial BCRA (serie 5) t-1
         try:
-            df_of = fetch_oficial_df(5)
+            df_of = fetch_oficial_df(5,   daily_key=dkey)
             t_minus_1 = (datetime.today() - timedelta(days=1)).date()
             oficial_t1 = float(df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"].iloc[-1])
             st.caption(f"Tipo de cambio oficial (BCRA) para la valuación de los DLK: {oficial_t1:,.2f}")
@@ -3359,7 +3345,7 @@ def main():
         # ---------- CER Bonos (objetos) ----------
         def _px_bid(sym):
             try:
-                return float(get_price_for_symbol(df_all_norm, sym, prefer="px_bid"))
+                return float(get_price_for_symbol(df_all_norm, sym, prefer="px_ask"))
             except Exception:
                 return np.nan
     
