@@ -3613,13 +3613,6 @@ def main():
         # =========================
         st.subheader("Curvas (TIREA vs MD)")
         
-        # ---- controles de escala ----
-        c1, c2 = st.columns(2)
-        with c1:
-            logx = st.checkbox("Escala log en MD (eje X)", value=False)
-        with c2:
-            logy = st.checkbox("Escala log en TIREA (eje Y, solo > 0)", value=False)
-        
         # --- helpers para armar DF y graficar ---
         def _fmt_date(d):
             if d is None:
@@ -3728,7 +3721,7 @@ def main():
         
         # --- tabs de curvas + una combinada ---
         tab_g_dlk, tab_g_tamar, tab_g_cer_l, tab_g_cer_b, tab_g_cer = st.tabs(
-            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "CER (ambas)"]
+            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "CER"]
         )
         
         with tab_g_dlk:
