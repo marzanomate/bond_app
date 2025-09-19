@@ -11,6 +11,7 @@ from scipy import optimize
 import numpy as np
 import pandas as pd
 import requests
+import json
 import streamlit as st
 from dateutil.relativedelta import relativedelta
 from requests.adapters import HTTPAdapter, Retry
@@ -303,6 +304,96 @@ def fetch_oficial_df(series_id: int = 5, daily_key: str = "") -> pd.DataFrame:
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
     df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
     return df.dropna().sort_values("fecha").reset_index(drop=True)
+
+# --- helper de sesión robusta ---
+def _requests_session():
+    s = requests.Session()
+    retries = Retry(
+        total=4,
+        backoff_factor=0.4,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retries))
+    s.verify = certifi.where()
+    return s
+
+# -------------------------------------------------------------
+# Riesgo País
+# -------------------------------------------------------------
+
+# --- ArgentinaDatos: último riesgo país ---
+@st.cache_data(ttl=10*60, show_spinner=False)  # 10 minutos; si querés diario, ver 'daily_key'
+def fetch_riesgo_pais(daily_key: str = "") -> dict:
+    url = "https://api.argentinadatos.com/v1/finanzas/indices/riesgo-pais/ultimo"
+    s = _requests_session()
+    try:
+        r = s.get(url, timeout=12)
+        r.raise_for_status()
+        js = r.json()
+    except SSLError:
+        # fallback (silencioso) si hubiera un problema de cert
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        r = s.get(url, timeout=12, verify=False)
+        r.raise_for_status()
+        js = r.json()
+    # estructura defensiva
+    valor = js.get("valor") or js.get("value") or np.nan
+    fecha = js.get("fecha") or js.get("date")
+    return {
+        "valor": float(valor) if valor is not None else np.nan,
+        "fecha": pd.to_datetime(fecha, errors="coerce"),
+        "_key": daily_key,  # fuerza recacheo si cambia daily_key
+    }
+
+# --- DolarAPI: todas las cotizaciones excepto "tarjeta" ---
+@st.cache_data(ttl=10*60, show_spinner=False)
+def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
+    url = "https://dolarapi.com/v1/dolares"
+    s = _requests_session()
+    try:
+        r = s.get(url, timeout=12)
+        r.raise_for_status()
+        arr = r.json()
+    except SSLError:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        r = s.get(url, timeout=12, verify=False)
+        r.raise_for_status()
+        arr = r.json()
+
+    df = pd.DataFrame(arr)
+    if df.empty:
+        return pd.DataFrame(columns=["nombre","compra","venta","fecha"])
+    # columnas típicas: casa / nombre / compra / venta / fechaActualizacion
+    # filtramos "tarjeta"
+    mask = ~df["casa"].astype(str).str.lower().eq("tarjeta")
+    df = df[mask].copy()
+
+    # orden amigable (si existen)
+    orden = ["oficial","mayorista","blue","bolsa","contadoconliqui","cripto","qatar","turista","ahorro"]
+    df["__ord"] = df["casa"].astype(str).str.lower().map({k:i for i,k in enumerate(orden)})
+    df = df.sort_values(["__ord","casa"], na_position="last")
+
+    # normalizamos y mostramos solo lo útil
+    df["compra"] = pd.to_numeric(df.get("compra"), errors="coerce")
+    df["venta"]  = pd.to_numeric(df.get("venta"),  errors="coerce")
+    df["fecha"]  = pd.to_datetime(df.get("fechaActualizacion"), errors="coerce")
+
+    # nombre visible: si viene 'nombre' lo usamos; si no, 'casa'
+    nombre = df.get("nombre")
+    df["nombre"] = np.where(nombre.notna(), nombre, df["casa"].str.title())
+
+    out = df[["nombre","compra","venta","fecha"]].rename(columns={
+        "nombre":"Dólar",
+        "compra":"Compra",
+        "venta":"Venta",
+        "fecha":"Actualización",
+    })
+    # formato prolijo
+    for c in ["Compra","Venta"]:
+        out[c] = out[c].round(2)
+    return out.assign(_key=daily_key)
+
 
 # =========================
 # Clase bond_calculator_pro
@@ -2691,6 +2782,49 @@ dlk_rows = [
     ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked")
 ]
 
+# --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
+def render_sidebar_info():
+    GITHUB_USER = "tu-usuario"  # <-- cambialo
+
+    with st.sidebar:
+        # Creador
+        st.markdown("### Creador")
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+              <img src="https://github.com/{GITHUB_USER}.png?size=64" width="32" height="32" style="border-radius:50%;" />
+              <a href="https://github.com/{GITHUB_USER}" target="_blank" rel="noopener">
+                @{GITHUB_USER}
+              </a>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Si querés refresco 1 vez por día a las 10:30
+        dkey = daily_anchor_key(hour=10, minute=30, tz="America/Argentina/Buenos_Aires")
+        rp = fetch_riesgo_pais(daily_key=dkey)
+        fx = fetch_dolares(daily_key=dkey)
+
+        st.markdown("### Mercado")
+        # Riesgo país
+        if np.isfinite(rp.get("valor", np.nan)):
+            fecha_txt = rp["fecha"].strftime("%d/%m/%Y") if pd.notna(rp.get("fecha")) else ""
+            st.metric(
+                label="Riesgo País (EMBI+ AR)",
+                value=f"{rp['valor']:,.0f} bps",
+                help=f"Fuente: ArgentinaDatos. Última fecha: {fecha_txt}" if fecha_txt else "Fuente: ArgentinaDatos",
+            )
+        else:
+            st.info("Riesgo país: sin datos.")
+
+        # Dólares (excepto tarjeta)
+        if isinstance(fx, pd.DataFrame) and not fx.empty:
+            st.markdown("#### Cotización de dólares")
+            st.dataframe(fx, use_container_width=True, hide_index=True)
+        else:
+            st.info("Dólares: sin datos.")
+
 # =========================
 # App UI
 # =========================
@@ -2717,6 +2851,10 @@ def main():
                 st.sidebar.error(f"Error al actualizar: {e}")
                 df_all, df_mep = pd.DataFrame(), pd.DataFrame()
 
+    # <-- AQUÍ renderizás el sidebar extra (creador + riesgo país + dólares)
+    render_sidebar_info()
+
+    # Recién después normalizás precios
     df_all_norm = normalize_market_df(df_all)
 
     # --- Construcción de universos ---
