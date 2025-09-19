@@ -2639,7 +2639,7 @@ dlk_rows = [
 
 def main():
     st.sidebar.title("Navegación")
-    page = st.sidebar.radio("Elegí sección", ["Bonos HD", "Lecaps", "Otros"], index=0)
+    page = st.sidebar.radio("Elegí sección", ["Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR"], index=0)
 
     # --- Carga de mercado + botón refrescar ---
     with st.spinner("Cargando precios de mercado..."):
@@ -2951,8 +2951,8 @@ def main():
         else:
             st.info("No hay bonos para los emisores seleccionados.")
 
-    elif page == "Lecaps":
-        st.title("LECAPs / BONCAPs / TAMAR")
+    elif page == "Lecaps - Boncaps":
+        st.title("LECAPs / BONCAPs")
     
         # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
@@ -3298,7 +3298,7 @@ def main():
     # =========================
     # Sección: Otros
     # =========================
-    elif page == "Otros":        
+    elif page == "CER - DLK - TAMAR":        
         
         dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
         st.title("CER / TAMAR / DLK")
