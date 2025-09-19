@@ -346,8 +346,10 @@ def fetch_riesgo_pais(daily_key: str = "") -> dict:
 # --- DolarAPI: todas las cotizaciones excepto "tarjeta" ---
 @st.cache_data(ttl=10*60, show_spinner=False)
 def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
+    import urllib3
     url = "https://dolarapi.com/v1/dolares"
     s = _requests_session()
+
     try:
         r = s.get(url, timeout=12)
         r.raise_for_status()
@@ -360,35 +362,33 @@ def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
 
     df = pd.DataFrame(arr)
     if df.empty:
-        return pd.DataFrame(columns=["nombre","compra","venta","fecha"])
-    # columnas típicas: casa / nombre / compra / venta / fechaActualizacion
-    # filtramos "tarjeta"
-    mask = ~df["casa"].astype(str).str.lower().eq("tarjeta")
-    df = df[mask].copy()
+        return pd.DataFrame(columns=["Dólar", "Compra", "Venta"])
 
-    # orden amigable (si existen)
-    orden = ["oficial","mayorista","blue","bolsa","contadoconliqui","cripto","qatar","turista","ahorro"]
-    df["__ord"] = df["casa"].astype(str).str.lower().map({k:i for i,k in enumerate(orden)})
-    df = df.sort_values(["__ord","casa"], na_position="last")
+    # --- columna "categoría" (nombre/casa/tipo) y filtro "tarjeta" ---
+    name_col = next((c for c in ("nombre", "casa", "tipo") if c in df.columns), None)
+    if name_col is None:
+        # fallback por si cambia el schema
+        df["Dólar"] = "Desconocido"
+    else:
+        df["__cat"] = df[name_col].astype(str).str.lower()
+        df = df[~df["__cat"].str.contains("tarjeta", na=False)].copy()
+        df["Dólar"] = df[name_col].astype(str).str.title()
 
-    # normalizamos y mostramos solo lo útil
-    df["compra"] = pd.to_numeric(df.get("compra"), errors="coerce")
-    df["venta"]  = pd.to_numeric(df.get("venta"),  errors="coerce")
-    df["fecha"]  = pd.to_datetime(df.get("fechaActualizacion"), errors="coerce")
+    # --- numéricos ---
+    compra = pd.to_numeric(df.get("compra"), errors="coerce")
+    venta  = pd.to_numeric(df.get("venta"),  errors="coerce")
 
-    # nombre visible: si viene 'nombre' lo usamos; si no, 'casa'
-    nombre = df.get("nombre")
-    df["nombre"] = np.where(nombre.notna(), nombre, df["casa"].str.title())
-    df = df.drop(columns=[c for c in ("key", "fecha") if c in df.columns], errors="ignore")
-    out = df[["nombre","compra","venta"]].rename(columns={
-        "nombre":"Dólar",
-        "compra":"Compra",
-        "venta":"Venta"
+    out = pd.DataFrame({
+        "Dólar": df.get("Dólar", "Desconocido"),
+        "Compra": compra.round(2),
+        "Venta":  venta.round(2),
     })
-    # formato prolijo
-    for c in ["Compra","Venta"]:
-        out[c] = out[c].round(2)
-    return out.assign(_key=daily_key)
+
+    # limpiar filas totalmente vacías
+    out = out.dropna(how="all", subset=["Compra", "Venta"])
+
+    # 👉 NO devolvemos _key/fecha/otros campos; solo las 3 columnas pedidas
+    return out
 
 
 # =========================
