@@ -111,7 +111,7 @@ def cer_at_or_before(df: pd.DataFrame, target_day: date) -> float:
 
 # === Fetch TAMAR (igual robusto que CER) ===
 @st.cache_data(ttl=60*60*12, show_spinner=False)
-def fetch_tamar_dfseries_id: int = 44, daily_key: str = "") -> pd.DataFrame:
+def fetch_tamar_df(series_id: int = 44, daily_key: str = "") -> pd.DataFrame:
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
     url = f"{base}/{version}/monetarias/{series_id}"
