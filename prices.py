@@ -3679,7 +3679,7 @@ def main():
         
         # --- tabs de curvas + una combinada ---
         tab_g_dlk, tab_g_tamar, tab_g_cer_l, tab_g_cer_b, tab_g_all = st.tabs(
-            ["DLK", "TAMAR", "CER Letras", "CER Bonos", "Todas"]
+            ["DLK", "TAMAR", "CER"]
         )
         
         with tab_g_dlk:
@@ -3696,10 +3696,10 @@ def main():
         
         with tab_g_all:
             df_all_plot = pd.concat(
-                [df_dlk_plot, df_tamar_plot, df_cer_letras_plot, df_cer_bonos_plot],
+                [df_cer_letras_plot, df_cer_bonos_plot],
                 ignore_index=True
             )
-            _plot_curve(df_all_plot, "Curva Combinada — TIREA vs MD")            
+            _plot_curve(df_all_plot, "Curva CER-L")            
 
 
 if __name__ == "__main__":
