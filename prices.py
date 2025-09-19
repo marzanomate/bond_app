@@ -28,7 +28,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Config Streamlit
 # =========================
 
-st.set_page_config(page_title="Bonos HD", page_icon="💵", layout="wide")
+st.set_page_config(page_title="Renta Fija Arg", page_icon="💵", layout="wide")
 
 def daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires") -> str:
     now = datetime.now(ZoneInfo(tz))
