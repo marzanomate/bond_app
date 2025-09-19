@@ -209,6 +209,60 @@ else:
     # Si después lo llevás a build_lecaps_metrics (que espera %), recordá multiplicar por 100:
     # ej: TEM_% = tamar_tem * 100.0
 
+# --- TNA30 TAMAR de referencia por ticker (TEM mensual -> TNA30 %) ---
+def _tamar_ref_tna30_pct(ticker: str) -> float:
+    # tus TEM están en DECIMAL mensual -> TNA30 % = TEM*12*100
+    base = {
+        "M10N5": tamar_tem_m10n5,
+        "M16E6": tamar_tem_m16e6,
+        "M27F6": tamar_tem_m27f6,
+    }
+    tem_ref = base.get(ticker, tamar_tem)        # default: TAMAR base
+    return round(tem_ref * 12.0 * 100.0, 2)      # % TNA30
+
+
+def _summarize_tamar_with_spread(objs):
+    rows = []
+    for o in objs:
+        # métricas implícitas por precio de mercado
+        try:
+            irr = float(o.xirr())
+        except Exception:
+            irr = np.nan
+        try:
+            tna30_imp = float(o.tna30())   # ya en %
+        except Exception:
+            tna30_imp = np.nan
+        try:
+            dur = float(o.duration())
+        except Exception:
+            dur = np.nan
+        try:
+            md = float(o.modified_duration())
+        except Exception:
+            md = np.nan
+
+        ref_tna30 = _tamar_ref_tna30_pct(o.name)           # % TNA30 ref. según ticker
+        spread = (tna30_imp - ref_tna30) if np.isfinite(tna30_imp) else np.nan
+
+        rows.append({
+            "Ticker": o.name,
+            "Vencimiento": _fmt_date(getattr(o, "end_date", None)),
+            "Precio": round(float(getattr(o, "price", np.nan)), 2),
+            "TIREA": round(irr, 2) if np.isfinite(irr) else np.nan,
+            "TNA30 (implícita)": round(tna30_imp, 2) if np.isfinite(tna30_imp) else np.nan,
+            "TNA30 TAMAR ref.": ref_tna30,
+            "Spread TNA30 (pp)": round(spread, 2) if np.isfinite(spread) else np.nan,
+            "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
+            "MD": round(md, 2) if np.isfinite(md) else np.nan,
+            "Pago Final": _pago_final_from_obj(o),
+            "Días al vencimiento": _dias_al_vto_from_obj(o),
+        })
+    cols = ["Ticker","Vencimiento","Precio","TIREA","TNA30 (implícita)",
+            "TNA30 TAMAR ref.","Spread TNA30 (pp)","Dur","MD","Pago Final","Días al vencimiento"]
+    return pd.DataFrame(rows, columns=cols)
+
+
 # --------------------------------------------------------
 # Último tipo de cambio oficial (serie 5) <= hoy
 # --------------------------------------------------------
@@ -3470,7 +3524,8 @@ def main():
     
         with tab_tamar:
             if tamar_objs:
-                st.dataframe(_summarize_objects_table(tamar_objs, "TAMAR"), width='stretch', hide_index=True)
+                df_tbl = _summarize_tamar_with_spread(tamar_objs)
+                st.dataframe(df_tbl, width='stretch', hide_index=True)
             else:
                 st.info("Sin datos TAMAR o TEM no disponible.")
     
