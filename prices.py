@@ -3653,25 +3653,14 @@ def main():
             df = pd.DataFrame(rows)
             return df.dropna(subset=["MD", "TIREA"])
         
-        def _plot_curve(df, title, logx=False, logy=False):
-            # filtrar si usamos log (log requiere valores > 0)
-            removed = 0
-            dfp = df.copy()
-            if logx:
-                before = len(dfp)
-                dfp = dfp[dfp["MD"] > 0]
-                removed += before - len(dfp)
-            if logy:
-                before = len(dfp)
-                dfp = dfp[dfp["TIREA"] > 0]
-                removed += before - len(dfp)
-        
-            if dfp.empty:
-                st.info("Sin datos para graficar con la escala seleccionada.")
+        def _plot_curve(df, title, add_log_fit=True):
+            if df.empty:
+                st.info("Sin datos para graficar.")
                 return
         
+            # Scatter (ejes lineales)
             fig = px.scatter(
-                dfp.sort_values("MD"),
+                df.sort_values("MD"),
                 x="MD", y="TIREA",
                 color="Tipo",
                 text="Ticker",
@@ -3685,12 +3674,51 @@ def main():
                 legend_title="",
                 margin=dict(l=10, r=10, t=60, b=10),
             )
-            fig.update_xaxes(type="log" if logx else "linear")
-            fig.update_yaxes(type="log" if logy else "linear", ticksuffix="%")
-            st.plotly_chart(fig, use_container_width=True)
+            fig.update_yaxes(ticksuffix="%")
         
-            if removed > 0:
-                st.caption(f"({removed} puntos excluidos por escala logarítmica)")
+            # --- Curva logarítmica: TIREA = a + b*ln(MD) ---
+            if add_log_fit:
+                # Datos válidos: MD>0 y sin NaN/Inf
+                sel = (
+                    df.replace([np.inf, -np.inf], np.nan)
+                      .dropna(subset=["MD", "TIREA"])
+                )
+                sel = sel[sel["MD"] > 0]
+        
+                if len(sel) >= 2 and sel["MD"].nunique() >= 2:
+                    x = sel["MD"].to_numpy(dtype=float)
+                    y = sel["TIREA"].to_numpy(dtype=float)
+        
+                    # Ajuste lineal en X' = ln(MD)
+                    Xp = np.log(x)
+                    m, c = np.polyfit(Xp, y, 1)   # y ≈ m*ln(MD) + c
+        
+                    # Curva suave en el rango observado
+                    x_line = np.linspace(x.min(), x.max(), 200)
+                    y_line = m * np.log(x_line) + c
+        
+                    # R^2 del ajuste
+                    y_hat = m * Xp + c
+                    ss_res = np.sum((y - y_hat) ** 2)
+                    ss_tot = np.sum((y - np.mean(y)) ** 2)
+                    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+        
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_line, y=y_line,
+                            mode="lines",
+                            name="Ajuste log",
+                            hoverinfo="skip"
+                        )
+                    )
+                    fig.add_annotation(
+                        text=f"y = {c:.2f} + {m:.2f}·ln(MD)<br>R² = {r2:.3f}",
+                        xref="paper", x=0.99, yref="paper", y=0.02,
+                        showarrow=False, xanchor="right", yanchor="bottom",
+                        font=dict(size=10)
+                    )
+        
+            st.plotly_chart(fig, use_container_width=True)
         
         # --- dataframes para cada familia ---
         df_cer_bonos_plot  = _df_for_plot(cer_bonos_objs,  "CER Bono")
