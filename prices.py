@@ -2796,7 +2796,10 @@ def render_sidebar_info():
             """,
             unsafe_allow_html=True,
         )
-
+        
+        rp = fetch_riesgo_pais()
+        fx = fetch_dolares()
+        
         st.markdown("### Mercado")
         # Riesgo país
         if np.isfinite(rp.get("valor", np.nan)):
