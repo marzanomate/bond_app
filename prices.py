@@ -3725,20 +3725,20 @@ def main():
         )
         
         with tab_g_dlk:
-            _plot_curve(df_dlk_plot, "Curva DLK — TIREA vs MD", logx=logx, logy=logy)
+            _plot_curve(df_dlk_plot, "Curva DLK — TIREA vs MD")
         
         with tab_g_tamar:
-            _plot_curve(df_tamar_plot, "Curva TAMAR — TIREA vs MD", logx=logx, logy=logy)
+            _plot_curve(df_tamar_plot, "Curva TAMAR — TIREA vs MD")
         
         with tab_g_cer_l:
-            _plot_curve(df_cer_letras_plot, "Curva CER Letras — TIREA vs MD", logx=logx, logy=logy)
+            _plot_curve(df_cer_letras_plot, "Curva CER Letras — TIREA vs MD")
         
         with tab_g_cer_b:
-            _plot_curve(df_cer_bonos_plot, "Curva CER Bonos — TIREA vs MD", logx=logx, logy=logy)
+            _plot_curve(df_cer_bonos_plot, "Curva CER Bonos — TIREA vs MD")
         
         with tab_g_cer:
             df_all_plot = pd.concat([df_cer_letras_plot, df_cer_bonos_plot], ignore_index=True)
-            _plot_curve(df_all_plot, "Curva CER — TIREA vs MD", logx=logx, logy=logy)
+            _plot_curve(df_all_plot, "Curva CER — TIREA vs MD")
 
 
 if __name__ == "__main__":
