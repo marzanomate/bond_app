@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 import plotly.express as px
 import plotly.graph_objects as go
 import QuantLib as ql
+import scipy.optimize as opt
 from scipy import optimize
 import numpy as np
 import pandas as pd
@@ -1013,10 +1014,10 @@ class cer_bonos:
     def xirr(self):
         f = lambda r: self.xnpv(rate_custom=r)
         try:
-            r = optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
+            r = opt.newton(f, 0.0)
         except RuntimeError:
-            r = scipy.optimize.brentq(f, -0.99, 10.0)
-        return round(r * 100.0, 2)  # % E.A.
+            r = opt.brentq(f, -0.99, 10.0)
+        return round(r * 100.0, 2)
 
     def tna_180(self):
         irr = self.xirr() / 100.0
@@ -1196,12 +1197,14 @@ class cer:
 # -----------------------------------------------------------------------------
 
 class dlk:
-    def __init__(self, name, start_date, end_date, mep, price):
+    def __init__(self, name, start_date, end_date, mep=None, oficial=None, price=100.0):
         self.name = name
         self.start_date = start_date
         self.end_date = end_date
-        self.oficial = oficial
-        self.price = price
+        # aceptar ambas variantes; prioridad a 'oficial' si viene
+        fx = oficial if oficial is not None else mep
+        self.fx = float(fx) if fx is not None else float("nan")
+        self.price = float(price)
         self.settlement = datetime.today() + timedelta(days=1)
         self.calendar = ql.Argentina(ql.Argentina.Merval)
         self.convention = ql.Following
@@ -1218,22 +1221,9 @@ class dlk:
         return [d_settle.strftime("%Y-%m-%d"), d_mty.strftime("%Y-%m-%d")]
 
     def cash_flow(self):
-        payments = []
-        capital = 100
-
-        dc = ql.Thirty360(ql.Thirty360.BondBasis)
-        ql_start = ql.Date(self.start_date.day, self.start_date.month, self.start_date.year)
-        ql_end = ql.Date(self.end_date.day, self.end_date.month, self.end_date.year)
-
-        days = dc.dayCount(ql_start, ql_end)
-        months = days / 30  # Approximate 30-day months
-
-        final_payment = 100 * self.oficial
-
-        payments.append(-self.price)
-        payments.append(final_payment)
-
-        return payments
+        # pago final en pesos = 100 * tipo de cambio (oficial t-1 en tu caso)
+        final_payment = 100.0 * self.fx
+        return [-self.price, final_payment]
 
     def xnpv(self, dates=None, cash_flow=None, rate_custom=0.08):
         dates = self.generate_payment_dates()
@@ -1355,16 +1345,9 @@ def normalize_rate_to_percent(r):
     return r*100.0 if r < 1 else r
  
 # ------------------------------------------------------------------
-# ===== Helpers universales Precio↔Rendimiento para cer_bonos / cer / dlk / lecaps =====
-# ------------------------------------------------------------------
-
-# ------------------------------------------------------------------
 # ===== Helpers universales (Otros) =====
 # Aplica a: cer_bonos / cer / dlk / lecaps (TAMAR)
 # ------------------------------------------------------------------
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
 
 # --------- Fechas / formato ----------
 def _parse_dt_dmy(s):
@@ -3410,7 +3393,7 @@ def main():
             ("TZXM7", "31/3/2027",  "20/5/2024", 361.3, "CER"),
             ("TZX27", "30/6/2027",  "1/2/2024",  200.4, "CER"),
             ("TZXD7", "15/12/2027", "15/3/2024", 271.0, "CER"),
-            ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER"),
+            ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER")
         ]
         cer_letras_objs = []
         for tk, vto, emi, cer_ini, _ in cer_rows:
@@ -3434,7 +3417,8 @@ def main():
             except Exception:
                 pass
     
-        # ---------- DLK (rows → objetos; usa oficial t-1) ----------
+
+            # ---------- DLK (usa oficial t-1) ----------
         dlk_rows = [
             ("D31O5", "10/07/2025", "31/10/2025", "Dólar Linked"),
             ("TZVD5", "01/07/2024", "15/12/2025", "Dólar Linked"),
@@ -3453,13 +3437,12 @@ def main():
                         name=tk,
                         start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
                         end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
-                        oficial=float(oficial_t1),   # ⬅ si tu clase aún usa 'mep', cambiar a mep=float(oficial_t1)
+                        oficial=float(oficial_t1),   # ✅ ahora soportado por el __init__
                         price=float(price),
                     )
                 )
             except Exception:
                 pass
-    
         # ---------- TAMAR (rows → objetos lecaps) ----------
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
@@ -3470,35 +3453,32 @@ def main():
                 ("TTM26","16/3/2026","29/1/2025", tamar_tem,        "TAMAR"),
                 ("TTJ26","30/6/2026","29/1/2025", tamar_tem,        "TAMAR"),
                 ("TTS26","15/9/2026","29/01/2025",tamar_tem,        "TAMAR"),
-                ("TTD26","15/12/2026","29/01/2025",tamar_tem,       "TAMAR"),
+                ("TTD26","15/12/2026","29/01/2025",tamar_tem,       "TAMAR")
             ]
             le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm)  # {ticker: lecaps}
             tamar_objs = list(le_map_tamar.values())
         except Exception:
             tamar_objs = []
     
-        # ---------- Panel de tablas ----------
+
+         # ---------- Panel de tablas ----------
         st.subheader("Métricas por instrumento")
-        tab_cer_bonos, tab_cer_letras, tab_dlk, tab_tamar = st.tabs(["CER Bonos", "CER Letras", "DLK", "TAMAR"])
-    
-        with tab_cer_bonos:
-            df_tbl = _summarize_objects_table(cer_bonos_objs, "CER Bono")
-            st.dataframe(df_tbl, width='stretch', hide_index=True)
-    
-        with tab_cer_letras:
-            df_tbl = _summarize_objects_table(cer_letras_objs, "CER Letra")
-            st.dataframe(df_tbl, width='stretch', hide_index=True)
+        tab_dlk, tab_tamar, tab_cer_bonos, tab_cer_letras = st.tabs(["DLK", "TAMAR", "CER Bonos", "CER Letras"])
     
         with tab_dlk:
-            df_tbl = _summarize_objects_table(dlk_objs, "Dólar Linked")
-            st.dataframe(df_tbl, width='stretch', hide_index=True)
+            st.dataframe(_summarize_objects_table(dlk_objs, "Dólar Linked"), width='stretch', hide_index=True)
     
         with tab_tamar:
             if tamar_objs:
-                df_tbl = _summarize_objects_table(tamar_objs, "TAMAR")
-                st.dataframe(df_tbl, width='stretch', hide_index=True)
+                st.dataframe(_summarize_objects_table(tamar_objs, "TAMAR"), width='stretch', hide_index=True)
             else:
                 st.info("Sin datos TAMAR o TEM no disponible.")
+    
+        with tab_cer_bonos:
+            st.dataframe(_summarize_objects_table(cer_bonos_objs, "CER Bono"), width='stretch', hide_index=True)
+    
+        with tab_cer_letras:
+            st.dataframe(_summarize_objects_table(cer_letras_objs, "CER Letra"), width='stretch', hide_index=True)
     
         st.divider()
     
