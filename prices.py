@@ -30,6 +30,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 st.set_page_config(page_title="Renta Fija Arg", page_icon="💵", layout="wide")
 
+# --- Badge GitHub, fijo junto al "Manage app" ---
+st.sidebar.markdown("**Creador:** [@marzanomate](https://github.com/marzamomate)")
+
+
 def daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires") -> str:
     now = datetime.now(ZoneInfo(tz))
     anchor = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
