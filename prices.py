@@ -2806,7 +2806,7 @@ def render_sidebar_info():
         if np.isfinite(rp.get("valor", np.nan)):
             fecha_txt = rp["fecha"].strftime("%d/%m/%Y") if pd.notna(rp.get("fecha")) else ""
             st.metric(
-                label="Riesgo País (EMBI+ AR)",
+                label="Riesgo País",
                 value=f"{rp['valor']:,.0f} bps",
                 help=f"Fuente: ArgentinaDatos. Última fecha: {fecha_txt}" if fecha_txt else "Fuente: ArgentinaDatos",
             )
