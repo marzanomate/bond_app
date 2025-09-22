@@ -2659,7 +2659,7 @@ def manual_bonds_factory(df_all):
 
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
-            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd]
+            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd, bpy6d]
 
 
 # =========================
