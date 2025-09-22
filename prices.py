@@ -2623,7 +2623,7 @@ def manual_bonds_factory(df_all):
     # BC7DD
     # =========================
     bc7dd = bond_calculator_pro(
-        name="BC7DD", emisor="Provincia Buenos Aires", curr="CCL/MEP", law="NY",
+        name="BC7DD", emisor="Provincia Buenos Aires", curr="MEP", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
