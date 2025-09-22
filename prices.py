@@ -344,17 +344,17 @@ def fetch_riesgo_pais(daily_key: str = "") -> dict:
     }
 
 # --- DolarAPI: todas las cotizaciones excepto "tarjeta" ---
-@st.cache_data(ttl=10*60, show_spinner=False)
-def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
+def fetch_dolares() -> pd.DataFrame:
     import urllib3
     url = "https://dolarapi.com/v1/dolares"
-    s = _requests_session()
+    s = _requests_session()  # tu helper de Session con retries si ya lo tenés
 
     try:
         r = s.get(url, timeout=12)
         r.raise_for_status()
         arr = r.json()
     except SSLError:
+        # fallback sin verificación (silenciando el warning)
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         r = s.get(url, timeout=12, verify=False)
         r.raise_for_status()
@@ -364,17 +364,15 @@ def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["Dólar", "Compra", "Venta"])
 
-    # --- columna "categoría" (nombre/casa/tipo) y filtro "tarjeta" ---
+    # columna “categoría” que pueda venir como nombre/casa/tipo
     name_col = next((c for c in ("nombre", "casa", "tipo") if c in df.columns), None)
     if name_col is None:
-        # fallback por si cambia el schema
         df["Dólar"] = "Desconocido"
     else:
         df["__cat"] = df[name_col].astype(str).str.lower()
         df = df[~df["__cat"].str.contains("tarjeta", na=False)].copy()
         df["Dólar"] = df[name_col].astype(str).str.title()
 
-    # --- numéricos ---
     compra = pd.to_numeric(df.get("compra"), errors="coerce")
     venta  = pd.to_numeric(df.get("venta"),  errors="coerce")
 
@@ -383,12 +381,7 @@ def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
         "Compra": compra.round(2),
         "Venta":  venta.round(2),
     })
-
-    # limpiar filas totalmente vacías
-    out = out.dropna(how="all", subset=["Compra", "Venta"])
-
-    # 👉 NO devolvemos _key/fecha/otros campos; solo las 3 columnas pedidas
-    return out
+    return out.dropna(how="all", subset=["Compra", "Venta"])
 
 
 # =========================
