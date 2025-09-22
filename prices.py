@@ -2550,7 +2550,7 @@ def manual_bonds_factory(df_all):
     name="BPY6D", emisor="BCRA", curr="CCL/MEP", law="ARG",
     start_date=datetime(2024,9,4), end_date=datetime(2026,5,31),
     payment_frequency=3,
-    amortization_dates=["2025-11-30","2026-02-28","2026-05-31"], amortizations=[33,33,34],
+    amortization_dates=["2025-11-28","2026-02-28","2026-05-31"], amortizations=[33,33,34],
     rate=3, price=px("BPY6D"),
     step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
