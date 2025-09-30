@@ -2731,7 +2731,7 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 # LECAPs / BONCAPs definidos a nivel módulo
 # ------------------------
 
-rows = [
+LECAPS_rows = [
     ("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
     ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
     ("S10N5", "10/11/2025","31/01/2025", 2.2, "Fija"),
