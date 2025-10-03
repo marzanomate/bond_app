@@ -10,7 +10,7 @@ import scipy.optimize as opt
 from scipy import optimize
 import numpy as np
 import pandas as pd
-import requestsF
+import requests
 import json
 import streamlit as st
 from dateutil.relativedelta import relativedelta
