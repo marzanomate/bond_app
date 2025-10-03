@@ -3632,52 +3632,88 @@ def main():
             ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked")
         ]
         dlk_objs = []
-        for tk, emi, vto, _ in dlk_rows:
+        # 1) Normalize price scale if needed (typical DLK prints in ARS per VN 1,000)
+        def _normalize_price(px: float) -> float:
             try:
-                price = get_price_for_symbol(df_all_norm, tk, prefer="px_ask")
+                v = float(px)
+                # Heuristic: if > 1,000 assume it's per 1,000 VN and bring to "price per 100"
+                # tweak to your convention; if your class expects "clean price % of par", use this:
+                if v >= 1000:
+                    return v / 1000.0
+                return v
             except Exception:
-                price = np.nan
-            dlk_objs.append(
-                dlk(
-                    name=tk,
-                    start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
-                    end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
-                    oficial=float(fx_user),
-                    price=float(price),
-                )
-            )
-    
-        # ---------- Tabla de métricas DLK ----------
+                return np.nan
+        
+        for b in dlk_objs:
+            try:
+                b.price = _normalize_price(b.price)
+            except Exception:
+                pass
+        
+        # 2) Settlement date (required by most yield/duration methods)
+        settlement = last_business_day_arg(0)
+        
+        # 3) Make sure cashflows exist (call your builder if available)
+        for b in dlk_objs:
+            try:
+                # Set FX (already set on init) and settlement as attributes if your class supports it
+                if hasattr(b, "oficial") and not np.isfinite(getattr(b, "oficial", np.nan)):
+                    setattr(b, "oficial", float(fx_user))
+                if hasattr(b, "settlement"):
+                    setattr(b, "settlement", settlement)
+        
+                # Rebuild cashflows if your class has a method for it
+                if hasattr(b, "recalc"):
+                    b.recalc()
+                elif hasattr(b, "rebuild"):
+                    b.rebuild()
+                elif hasattr(b, "_build_cashflows"):
+                    b._build_cashflows()
+            except Exception:
+                pass
+        
+        # 4) Metrics (NaN-safe)
+        def _num(x, nd=2):
+            try:
+                v = float(x)
+                return round(v, nd) if np.isfinite(v) else np.nan
+            except Exception:
+                return np.nan
+        
         def dlk_metrics_table(objs, settlement=None):
-            def _num(x, nd=2):
-                try:
-                    v = float(x)
-                    return round(v, nd) if np.isfinite(v) else np.nan
-                except Exception:
-                    return np.nan
-    
             rows = []
             for b in objs:
                 try:
+                    tir = b.xirr(settlement) if callable(getattr(b, "xirr", None)) else getattr(b, "xirr", np.nan)
+                    tna = b.tna_180(settlement) if callable(getattr(b, "tna_180", None)) else np.nan
+                    dur = b.duration(settlement) if callable(getattr(b, "duration", None)) else np.nan
+                    md  = b.modified_duration(settlement) if callable(getattr(b, "modified_duration", None)) else np.nan
+                    cvx = b.convexity(settlement) if callable(getattr(b, "convexity", None)) else np.nan
+                    par = b.parity(settlement) if callable(getattr(b, "parity", None)) else (getattr(b, "parity", np.nan))
+                    cy  = b.current_yield(settlement) if callable(getattr(b, "current_yield", None)) else np.nan
+        
                     rows.append({
                         "Ticker": b.name,
                         "Precio": _num(b.price, 2),
-                        "TIR": _num(b.xirr(settlement), 2),
-                        "TNA 180": _num(b.tna_180(settlement) if hasattr(b, "tna_180") else np.nan, 2),
-                        "Duration": _num(b.duration(settlement), 2),
-                        "Modified Duration": _num(b.modified_duration(settlement), 2),
-                        "Convexidad": _num(b.convexity(settlement), 2),
-                        "Paridad": _num(b.parity(settlement) if hasattr(b, "parity") else np.nan, 2),
-                        "Current Yield": _num(b.current_yield(settlement) if hasattr(b, "current_yield") else np.nan, 2),
+                        "TIR": _num(tir, 2),
+                        "TNA 180": _num(tna, 2),
+                        "Duration": _num(dur, 2),
+                        "Modified Duration": _num(md, 2),
+                        "Convexidad": _num(cvx, 2),
+                        "Paridad": _num(par, 2),
+                        "Current Yield": _num(cy, 2),
                     })
                 except Exception:
-                    rows.append({"Ticker": b.name, "Precio": _num(b.price, 2),
-                                 "TIR": np.nan, "TNA 180": np.nan, "Duration": np.nan,
-                                 "Modified Duration": np.nan, "Convexidad": np.nan,
-                                 "Paridad": np.nan, "Current Yield": np.nan})
+                    rows.append({
+                        "Ticker": getattr(b, "name", "?"),
+                        "Precio": _num(getattr(b, "price", np.nan), 2),
+                        "TIR": np.nan, "TNA 180": np.nan, "Duration": np.nan,
+                        "Modified Duration": np.nan, "Convexidad": np.nan,
+                        "Paridad": np.nan, "Current Yield": np.nan
+                    })
             return pd.DataFrame(rows)
-    
-        df_metrics_dlk = dlk_metrics_table(dlk_objs, settlement=None)
+        
+        df_metrics_dlk = dlk_metrics_table(dlk_objs, settlement=settlement)
     
         # ---------- TAMAR (rows → objetos lecaps) ----------
         try:
