@@ -3489,13 +3489,12 @@ def main():
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
                 st.plotly_chart(fig_fx, width='stretch')
-             
-    # =========================
-    # Sección: Otros
-    # =========================
-    elif page == "CER - DLK - TAMAR":        
+             # =========================
+# Sección: Otros
+# =========================
+elif page == "CER - DLK - TAMAR":        
         
-        dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
+        dkey = daily_anchor_key(hour=12, minute=0, tz="America/Argentina/Buenos_Aires")
         st.title("CER / TAMAR / DLK")
     
         # ---------- Datos base ----------
@@ -3503,35 +3502,37 @@ def main():
     
         # CER t-10 hábiles
         try:
-            df_cer_series = fetch_cer_df(30,  daily_key=dkey)
+            df_cer_series = fetch_cer_df(30, daily_key=dkey)
             target_cer = last_business_day_arg(10)
             cer_final = cer_at_or_before(df_cer_series, target_cer)
         except Exception as e:
             st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
             cer_final = 100.0
     
-        # Oficial BCRA (serie 5) t-1
+        # Oficial BCRA (serie 5) t-1 (día hábil)
         try:
-            df_of = fetch_oficial_df(5,   daily_key=dkey)
-            t_minus_1 = (datetime.today() - timedelta(days=3)).date()
-            oficial_t1 = float(df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"].iloc[-1])
+            df_of = fetch_oficial_df(5, daily_key=dkey)
+            t_minus_1 = last_business_day_arg(1)
+            oficial_t1_series = df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"]
+            oficial_t1 = float(oficial_t1_series.iloc[-1]) if not oficial_t1_series.empty else np.nan
             st.caption(f"Tipo de cambio oficial (BCRA) para la valuación de los DLK: {oficial_t1:,.2f}")
         except Exception as e:
             st.warning(f"No se pudo leer Oficial (serie 5) t-1. Detalle: {e}")
             oficial_t1 = np.nan
     
-        # ---------- CER Bonos (objetos) ----------
-        def _px_bid(sym):
+        # ---------- Helper precios ----------
+        def _px_ask(sym: str) -> float:
             try:
                 return float(get_price_for_symbol(df_all_norm, sym, prefer="px_ask"))
             except Exception:
                 return np.nan
     
+        # ---------- CER Bonos (objetos) ----------
         tx25 = cer_bonos(
             name="TX25", cer_final=cer_final, cer_inicial=46.20846297,
             start_date=datetime(2022, 11, 9), end_date=datetime(2025, 11, 9),
             payment_frequency=6, amortization_dates=["2025-11-09"], amortizations=[100],
-            rate=1.8, price=_px_bid("TX25"), fr=2,
+            rate=1.8, price=_px_ask("TX25"), fr=2,
         )
         tx26 = cer_bonos(
             name="TX26", cer_final=cer_final, cer_inicial=22.5439510895903,
@@ -3539,7 +3540,7 @@ def main():
             payment_frequency=6,
             amortization_dates=["2024-11-09","2025-05-09","2025-11-09","2026-05-09","2026-11-09"],
             amortizations=[20,20,20,20,20],
-            rate=2.0, price=_px_bid("TX26"), fr=2,
+            rate=2.0, price=_px_ask("TX26"), fr=2,
         )
         tx28 = cer_bonos(
             name="TX28", cer_final=cer_final, cer_inicial=22.5439510895903,
@@ -3549,7 +3550,7 @@ def main():
                 "2024-05-09","2024-11-09","2025-05-09","2025-11-09","2026-05-09",
                 "2026-11-09","2027-05-09","2027-11-09","2028-05-09","2028-11-09",
             ],
-            amortizations=[10]*10, rate=2.25, price=_px_bid("TX28"), fr=2,
+            amortizations=[10]*10, rate=2.25, price=_px_ask("TX28"), fr=2,
         )
         dicp = cer_bonos(
             name="DICP", cer_final=cer_final*(1+0.26994), cer_inicial=1.45517953387336,
@@ -3561,7 +3562,7 @@ def main():
                 "2029-06-30","2029-12-31","2030-06-30","2030-12-31","2031-06-30",
                 "2031-12-31","2032-06-30","2032-12-31","2033-06-30","2033-12-31",
             ],
-            amortizations=[5]*20, rate=5.83, price=_px_bid("DICP"), fr=2,
+            amortizations=[5]*20, rate=5.83, price=_px_ask("DICP"), fr=2,
         )
         cuap = cer_bonos(
             name="CUAP", cer_final=cer_final*(1+0.388667433600987), cer_inicial=1.45517953387336,
@@ -3573,7 +3574,7 @@ def main():
                 "2041-06-30","2041-12-31","2042-06-30","2042-12-31","2043-06-30",
                 "2043-12-31","2044-06-30","2044-12-31","2045-06-30","2045-12-31",
             ],
-            amortizations=[5]*20, rate=3.31, price=_px_bid("CUAP"), fr=2,
+            amortizations=[5]*20, rate=3.31, price=_px_ask("CUAP"), fr=2,
         )
         cer_bonos_objs = [tx25, tx26, tx28, dicp, cuap]
     
@@ -3611,15 +3612,17 @@ def main():
                 )
             except Exception:
                 pass
-        # --- 1) FX input (user-provided) ---
+    
+        # --- Parámetros (FX editable) ---
         st.subheader("Parámetros")
-        fx_default = float(oficial_t1) if "oficial_t1" in globals() else 1000.0
+        fx_default = oficial_t1 if np.isfinite(oficial_t1) else 1000.0
         fx_user = st.number_input(
             "Tipo de cambio oficial (T+1)",
-            min_value=0.0, step=0.5, value=fx_default, help="Ingresa el FX para valuar los DLK"
+            min_value=0.0, step=0.5, value=float(fx_default),
+            help="Ingresa el FX para valuar los DLK"
         )
-
-            # ---------- DLK (usa oficial t-1) ----------
+    
+        # ---------- DLK (con FX ingresado) ----------
         dlk_rows = [
             ("D31O5", "10/07/2025", "31/10/2025", "Dolar Linked"),
             ("D28N5", "30/09/2025", "28/11/2025", "Dolar Linked"),
@@ -3639,43 +3642,44 @@ def main():
                     name=tk,
                     start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
                     end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
-                    oficial=float(fx_user),   # 👈 usa el FX ingresado por el usuario
+                    oficial=float(fx_user),
                     price=float(price),
                 )
             )
-        
-        # --- 3) Cálculo de métricas (con el FX nuevo) ---
+    
+        # ---------- Tabla de métricas DLK ----------
         def dlk_metrics_table(objs, settlement=None):
+            def _num(x, nd=2):
+                try:
+                    v = float(x)
+                    return round(v, nd) if np.isfinite(v) else np.nan
+                except Exception:
+                    return np.nan
+    
             rows = []
             for b in objs:
                 try:
                     rows.append({
                         "Ticker": b.name,
-                        "Precio": round(float(b.price), 2) if b.price == b.price else np.nan,
-                        "TIR": b.xirr(settlement),
-                        "TNA 180": b.tna_180(settlement) if hasattr(b, "tna_180") else np.nan,
-                        "Duration": b.duration(settlement),
-                        "Modified Duration": b.modified_duration(settlement),
-                        "Convexidad": b.convexity(settlement),
-                        "Paridad": b.parity(settlement) if hasattr(b, "parity") else np.nan,
-                        "Current Yield": b.current_yield(settlement) if hasattr(b, "current_yield") else np.nan,
+                        "Precio": _num(b.price, 2),
+                        "TIR": _num(b.xirr(settlement), 2),
+                        "TNA 180": _num(b.tna_180(settlement) if hasattr(b, "tna_180") else np.nan, 2),
+                        "Duration": _num(b.duration(settlement), 2),
+                        "Modified Duration": _num(b.modified_duration(settlement), 2),
+                        "Convexidad": _num(b.convexity(settlement), 2),
+                        "Paridad": _num(b.parity(settlement) if hasattr(b, "parity") else np.nan, 2),
+                        "Current Yield": _num(b.current_yield(settlement) if hasattr(b, "current_yield") else np.nan, 2),
                     })
                 except Exception:
-                    # Si un bono falla, lo omitimos o lo marcamos
-                    rows.append({"Ticker": b.name, "Precio": b.price, "TIR": np.nan,
-                                 "TNA 180": np.nan, "Duration": np.nan, "Modified Duration": np.nan,
-                                 "Convexidad": np.nan, "Paridad": np.nan, "Current Yield": np.nan})
-            df = pd.DataFrame(rows)
-            # Redondeos prolijos
-            for col in ("TIR", "TNA 180", "Duration", "Modified Duration", "Convexidad", "Paridad", "Current Yield"):
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce").round(2)
-            return df
-        
+                    rows.append({"Ticker": b.name, "Precio": _num(b.price, 2),
+                                 "TIR": np.nan, "TNA 180": np.nan, "Duration": np.nan,
+                                 "Modified Duration": np.nan, "Convexidad": np.nan,
+                                 "Paridad": np.nan, "Current Yield": np.nan})
+            return pd.DataFrame(rows)
+    
         df_metrics_dlk = dlk_metrics_table(dlk_objs, settlement=None)
-
+    
         # ---------- TAMAR (rows → objetos lecaps) ----------
-        # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
             tamar_rows = [
                 ("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
@@ -3691,26 +3695,28 @@ def main():
         except Exception:
             tamar_objs = []
     
-
-         # ---------- Panel de tablas ----------
+        # ---------- Panel de tablas ----------
         st.subheader("Métricas por instrumento")
         tab_dlk, tab_tamar, tab_cer_bonos, tab_cer_letras = st.tabs(["DLK", "TAMAR", "CER Bonos", "CER Letras"])
     
         with tab_dlk:
-            st.dataframe(df_metrics_dlk, use_container_width=True)
+            st.dataframe(df_metrics_dlk, use_container_width=True, hide_index=True)
     
         with tab_tamar:
             if tamar_objs:
                 df_tbl = _summarize_tamar_with_spread(tamar_objs)
-                st.dataframe(df_tbl, width='stretch', hide_index=True)
+                st.dataframe(df_tbl, use_container_width=True, hide_index=True)
             else:
                 st.info("Sin datos TAMAR o TEM no disponible.")
     
         with tab_cer_bonos:
-            st.dataframe(_summarize_objects_table(cer_bonos_objs, "CER Bono"), width='stretch', hide_index=True)
+            st.dataframe(_summarize_objects_table(cer_bonos_objs, "CER Bono"),
+                         use_container_width=True, hide_index=True)
     
         with tab_cer_letras:
-            st.dataframe(_summarize_objects_table(cer_letras_objs, "CER Letra"), width='stretch', hide_index=True)
+            st.dataframe(_summarize_objects_table(cer_letras_objs, "CER Letra"),
+                         use_container_width=True, hide_index=True)
+
     
         st.divider()
     
