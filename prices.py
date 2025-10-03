@@ -3621,7 +3621,7 @@ def main():
             ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
         ]
         
-        oficial_fx = float(fx.loc[fx["Dólar"].str.lower()=="oficial", "Venta"].iloc[-1])
+        oficial_fx = fx.loc[fx["Dólar"].str.lower()=="Oficial", "Venta"].iloc[-1]
         
         dlk_objs = []
         for tk, emi, vto, _ in dlk_rows:
