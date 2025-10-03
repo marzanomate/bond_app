@@ -10,7 +10,7 @@ import scipy.optimize as opt
 from scipy import optimize
 import numpy as np
 import pandas as pd
-import requests
+import requestsF
 import json
 import streamlit as st
 from dateutil.relativedelta import relativedelta
@@ -3620,6 +3620,8 @@ def main():
             ("D16E6", "28/04/2025", "16/01/2026", "Dólar Linked"),
             ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
         ]
+
+        fx = fetch_dolares()
         
         oficial_fx = fx.loc[fx["Dólar"].str.lower()=="Oficial", "Venta"].iloc[-1]
         
