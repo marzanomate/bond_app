@@ -3620,6 +3620,13 @@ def main():
             ("D16E6", "28/04/2025", "16/01/2026", "Dólar Linked"),
             ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
         ]
+        
+        oficial_fx = (
+            fx.loc[fx["casa"].str.lower() == "oficial", "venta"]
+            .astype(float)
+            .iloc[-1]
+            )
+        
         dlk_objs = []
         for tk, emi, vto, _ in dlk_rows:
             try:
@@ -3632,7 +3639,7 @@ def main():
                         name=tk,
                         start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
                         end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
-                        oficial=float(oficial_t1),   # ✅ ahora soportado por el __init__
+                        oficial=float(oficial_fx),   # ✅ ahora soportado por el __init__
                         price=float(price),
                     )
                 )
