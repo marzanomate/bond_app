@@ -3515,7 +3515,7 @@ def main():
             df_of = fetch_oficial_df(5,   daily_key=dkey)
             t_minus_1 = (datetime.today() - timedelta(days=3)).date()
             oficial_t1 = float(df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"].iloc[-1])
-            st.caption(f"Tipo de cambio oficial (BCRA) para la valuación de los DLK: {oficial_t1:,.2f}")
+
         except Exception as e:
             st.warning(f"No se pudo leer Oficial (serie 5) t-1. Detalle: {e}")
             oficial_t1 = np.nan
