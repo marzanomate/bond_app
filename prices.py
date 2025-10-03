@@ -3492,7 +3492,7 @@ def main():
              # =========================
 # Sección: Otros
 # =========================
-elif page == "CER - DLK - TAMAR":        
+    elif page == "CER - DLK - TAMAR":        
         
         dkey = daily_anchor_key(hour=12, minute=0, tz="America/Argentina/Buenos_Aires")
         st.title("CER / TAMAR / DLK")
