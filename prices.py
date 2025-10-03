@@ -3611,7 +3611,13 @@ def main():
                 )
             except Exception:
                 pass
-    
+        # --- 1) FX input (user-provided) ---
+        st.subheader("Parámetros")
+        fx_default = float(oficial_t1) if "oficial_t1" in globals() else 1000.0
+        fx_user = st.number_input(
+            "Tipo de cambio oficial (T+1)",
+            min_value=0.0, step=0.5, value=fx_default, help="Ingresa el FX para valuar los DLK"
+        )
 
             # ---------- DLK (usa oficial t-1) ----------
         dlk_rows = [
@@ -3628,18 +3634,46 @@ def main():
                 price = get_price_for_symbol(df_all_norm, tk, prefer="px_ask")
             except Exception:
                 price = np.nan
-            try:
-                dlk_objs.append(
-                    dlk(
-                        name=tk,
-                        start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
-                        end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
-                        oficial=float(oficial_t1),   # ✅ ahora soportado por el __init__
-                        price=float(price),
-                    )
+            dlk_objs.append(
+                dlk(
+                    name=tk,
+                    start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
+                    end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
+                    oficial=float(fx_user),   # 👈 usa el FX ingresado por el usuario
+                    price=float(price),
                 )
-            except Exception:
-                pass
+            )
+        
+        # --- 3) Cálculo de métricas (con el FX nuevo) ---
+        def dlk_metrics_table(objs, settlement=None):
+            rows = []
+            for b in objs:
+                try:
+                    rows.append({
+                        "Ticker": b.name,
+                        "Precio": round(float(b.price), 2) if b.price == b.price else np.nan,
+                        "TIR": b.xirr(settlement),
+                        "TNA 180": b.tna_180(settlement) if hasattr(b, "tna_180") else np.nan,
+                        "Duration": b.duration(settlement),
+                        "Modified Duration": b.modified_duration(settlement),
+                        "Convexidad": b.convexity(settlement),
+                        "Paridad": b.parity(settlement) if hasattr(b, "parity") else np.nan,
+                        "Current Yield": b.current_yield(settlement) if hasattr(b, "current_yield") else np.nan,
+                    })
+                except Exception:
+                    # Si un bono falla, lo omitimos o lo marcamos
+                    rows.append({"Ticker": b.name, "Precio": b.price, "TIR": np.nan,
+                                 "TNA 180": np.nan, "Duration": np.nan, "Modified Duration": np.nan,
+                                 "Convexidad": np.nan, "Paridad": np.nan, "Current Yield": np.nan})
+            df = pd.DataFrame(rows)
+            # Redondeos prolijos
+            for col in ("TIR", "TNA 180", "Duration", "Modified Duration", "Convexidad", "Paridad", "Current Yield"):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").round(2)
+            return df
+        
+        df_metrics_dlk = dlk_metrics_table(dlk_objs, settlement=None)
+
         # ---------- TAMAR (rows → objetos lecaps) ----------
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
@@ -3663,7 +3697,7 @@ def main():
         tab_dlk, tab_tamar, tab_cer_bonos, tab_cer_letras = st.tabs(["DLK", "TAMAR", "CER Bonos", "CER Letras"])
     
         with tab_dlk:
-            st.dataframe(_summarize_objects_table(dlk_objs, "Dólar Linked"), width='stretch', hide_index=True)
+            st.dataframe(df_metrics_dlk, use_container_width=True)
     
         with tab_tamar:
             if tamar_objs:
