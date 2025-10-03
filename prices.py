@@ -3515,7 +3515,7 @@ def main():
             t_minus_1 = last_business_day_arg(1)
             oficial_t1_series = df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"]
             oficial_t1 = float(oficial_t1_series.iloc[-1]) if not oficial_t1_series.empty else np.nan
-            st.caption(f"Tipo de cambio oficial (BCRA) para la valuación de los DLK: {oficial_t1:,.2f}")
+            # st.caption(f"Tipo de cambio oficial (BCRA) para la valuación de los DLK: {oficial_t1:,.2f}")
         except Exception as e:
             st.warning(f"No se pudo leer Oficial (serie 5) t-1. Detalle: {e}")
             oficial_t1 = np.nan
@@ -3617,7 +3617,7 @@ def main():
         st.subheader("Parámetros")
         fx_default = oficial_t1 if np.isfinite(oficial_t1) else 1000.0
         fx_user = st.number_input(
-            "Tipo de cambio oficial (T+1)",
+            "Tipo de cambio",
             min_value=0.0, step=0.5, value=float(fx_default),
             help="Ingresa el FX para valuar los DLK"
         )
