@@ -3057,37 +3057,35 @@ def main():
                 )
             else:
                 st.info("Elegí al menos un bono.")
-        
         # =========================
         # 4) Curvas comparadas por Emisor (TIR vs Modified Duration)
         # =========================
         st.subheader("Curvas comparadas por Emisor (TIR vs Modified Duration)")
-
+        
         # Parto de las métricas ya calculadas (o recalculo por seguridad)
         df_metrics = metrics_bcp(all_bonds).copy()
-
+        
         # Emitores disponibles
         emisores_all = sorted([e for e in df_metrics["Emisor"].dropna().unique()])
-
+        
         colc1, colc2, colc3 = st.columns([1,1,2])
         with colc1:
             em1 = st.selectbox("Emisor A", emisores_all, index=0, key="curve_em1")
         with colc2:
-            # por defecto un emisor diferente a em1 si existe
             idx_default = 1 if len(emisores_all) > 1 else 0
             em2 = st.selectbox("Emisor B", emisores_all, index=idx_default, key="curve_em2")
         with colc3:
             st.caption("Gráfico: eje X = Modified Duration | eje Y = TIR (e.a. %)")
-
+        
         # Filtro por los dos emisores seleccionados
         emisores_sel = [em1, em2] if em1 != em2 else [em1]
         df_curves = df_metrics[df_metrics["Emisor"].isin(emisores_sel)].copy()
-
+        
         # Asegurar numéricos y 1 decimal para la tabla
         for c in ["TIR", "Modified Duration", "Precio", "TNA SA", "Convexidad", "Paridad", "Current Yield"]:
             if c in df_curves.columns:
                 df_curves[c] = pd.to_numeric(df_curves[c], errors="coerce")
-
+        
         # Scatter interactivo
         if not df_curves.empty:
             fig = px.scatter(
@@ -3120,8 +3118,8 @@ def main():
                 height=480,
                 margin=dict(l=10, r=10, t=10, b=10),
             )
-            st.plotly_chart(fig, width='stretch')
-
+            st.plotly_chart(fig, use_container_width=True)
+        
             # Tabla debajo (1 decimal, sin índice)
             st.markdown("**Bonos incluidos en las curvas:**")
             cols_show = [
@@ -3140,36 +3138,111 @@ def main():
                     "Paridad": "{:.1f}",
                     "Current Yield": "{:.1f}",
                 }),
-                width='stretch',
+                use_container_width=True,
                 hide_index=True
             )
         else:
             st.info("No hay bonos para los emisores seleccionados.")
+        
         # ================================
-        # Portfolio Builder — Bonos HD
-        # (pegar debajo de "Curves")
+        # Portfolio Builder — Bonos HD (con IRR y MD "estrictas")
         # ================================
         st.markdown("### 🧺 Portfolio Bonos HD")
         
-        # 1) Armar universo de objetos disponibles (dict ticker -> objeto)
-        #    Ajustá estas fuentes según tu sección Bonos HD.
-        objs_universo: dict[str, Any] = {}
+        # ---- helpers de cartera ----
+        def _detect_yield_unit(irr_sample: float) -> dict:
+            """Detecta si irr está en % o en decimal y define bump de 10 bps y Δy_decimal."""
+            if not np.isfinite(irr_sample):
+                # fallback: asumir % (común en tu app)
+                return {"in_percent": True, "bump_pp": 0.10, "bump_decimal": 0.001}
+            in_percent = abs(irr_sample) > 1.5  # heurística
+            if in_percent:
+                return {"in_percent": True, "bump_pp": 0.10, "bump_decimal": 0.001}   # 10 bps
+            else:
+                return {"in_percent": False, "bump_pp": 0.001, "bump_decimal": 0.001} # 10 bps
         
-        # Ejemplos de mapas ya existentes en tu app. Incluí solo los que uses en Bonos HD.
-        # - bcp_map: bonos ARS (bond_calculator_pro) que ya armás en build_extra_ars_bonds_for_lecaps
-        # - le_map: LECAPs/BONCAPs (lecaps) si los mostrás en HD
-        # - cer_map: bonos CER (cer_bonos) si forman parte de HD
+        def _solve_portfolio_irr_strict(items: list[dict], unit: dict) -> float | float("nan"):
+            """
+            IRR estricta: hallar y* tal que sum(w_i * Price_i(y*)) == sum(w_i * Price_i(mkt)) por 100 VN.
+            Usa bisección sobre un rango amplio en la unidad detectada (pp si %; decimal si no).
+            """
+            # Precio de mercado por 100 VN (ponderado)
+            target_p = sum(x["w"] * x["price"] for x in items if np.isfinite(x["price"]))
+            if not np.isfinite(target_p) or target_p <= 0:
+                return float("nan")
+        
+            # Rango de búsqueda (pp si en %; decimal si no)
+            irr_vals = [x["irr_pct"] for x in items if np.isfinite(x["irr_pct"])]
+            if not irr_vals:
+                return float("nan")
+            lo = min(irr_vals); hi = max(irr_vals)
+            # ampliar el rango
+            if unit["in_percent"]:
+                lo -= 10.0; hi += 10.0
+            else:
+                lo = max(lo - 0.10, 1e-6); hi = hi + 0.10
+        
+            def f(y):
+                # precio teórico de cartera a y
+                s = 0.0
+                for x in items:
+                    try:
+                        py = _any_price_from_yield(x["obj"], y)
+                    except Exception:
+                        py = float("nan")
+                    if np.isfinite(py):
+                        s += x["w"] * py
+                return s - target_p
+        
+            # asegurar que el bracket cambie de signo; si no, expandir un poco
+            f_lo = f(lo); f_hi = f(hi)
+            tries = 0
+            while (not np.isfinite(f_lo) or not np.isfinite(f_hi) or f_lo * f_hi > 0) and tries < 6:
+                # expandir
+                if unit["in_percent"]:
+                    lo -= 10.0; hi += 10.0
+                else:
+                    lo = max(lo - 0.10, 1e-6); hi += 0.10
+                f_lo = f(lo); f_hi = f(hi)
+                tries += 1
+            if not (np.isfinite(f_lo) and np.isfinite(f_hi) and f_lo * f_hi <= 0):
+                return float("nan")
+        
+            # bisección
+            for _ in range(60):
+                mid = 0.5 * (lo + hi)
+                fm = f(mid)
+                if not np.isfinite(fm):
+                    break
+                if abs(fm) < 1e-6:
+                    return mid
+                if f_lo * fm <= 0:
+                    hi = mid; f_hi = fm
+                else:
+                    lo = mid; f_lo = fm
+            return 0.5 * (lo + hi)
+        
+        # 1) Universo de objetos disponibles (dict ticker -> objeto)
+        objs_universo: dict[str, Any] = {}
         for m in (
-            globals().get("bcp_map", {}),      # {'TO26': bond_calculator_pro(...), ...}
-            globals().get("le_map", {}),       # {'M10N5': lecaps(...), ...}
-            globals().get("cer_map", {}),      # {'TX26': cer_bonos(...), ...} (si corresponde)
+            globals().get("bcp_map", {}),
+            globals().get("le_map", {}),
+            globals().get("cer_map", {}),
         ):
             if isinstance(m, dict):
                 objs_universo.update({k: v for k, v in m.items() if v is not None})
         
         if not objs_universo:
-            st.info("No encontré objetos de bonos para la cartera. Asegurate de construir los mapas (bcp_map/le_map/cer_map) antes de este bloque.")
+            st.info("No encontré objetos de bonos para la cartera. Construí los mapas (bcp_map/le_map/cer_map) antes de este bloque.")
         else:
+            # (opcional) si Bonos HD = USD:
+            try:
+                usd_tickers = set(df_metrics.loc[df_metrics["Moneda de Pago"].str.upper().eq("USD"), "Ticker"])
+                if usd_tickers:
+                    objs_universo = {k: v for k, v in objs_universo.items() if k in usd_tickers}
+            except Exception:
+                pass
+        
             tickers = sorted(objs_universo.keys())
             sel = st.multiselect(
                 "Elegí activos de la cartera",
@@ -3180,6 +3253,8 @@ def main():
         
             if sel:
                 st.write("Ingresá los pesos de la cartera (suman 100%).")
+                monto_nominal = st.number_input("Monto nominal total (VN)", min_value=0.0, value=100000.0, step=1000.0)
+        
                 cols = st.columns([2,1,1,1,1])
                 cols[0].markdown("**Ticker**")
                 cols[1].markdown("**Peso %**")
@@ -3187,39 +3262,29 @@ def main():
                 cols[3].markdown("**MD (años)**")
                 cols[4].markdown("**Precio**")
         
-                # inputs de pesos y captura de métricas por activo
                 items = []
                 for tk in sel:
                     o = objs_universo[tk]
-                    # métricas base
                     try:
-                        irr = float(o.xirr())                # % EA
+                        irr = float(o.xirr())             # % EA (o decimal, lo detectamos abajo)
                     except Exception:
                         irr = float("nan")
                     try:
-                        md = float(o.modified_duration())    # años
+                        md = float(o.modified_duration()) # años
                     except Exception:
                         md = float("nan")
                     price = float(getattr(o, "price", float("nan")))
         
-                    # UI de peso
-                    with cols[0]:
-                        st.write(tk)
+                    with cols[0]: st.write(tk)
                     with cols[1]:
                         w = st.number_input(f"w_{tk}", min_value=0.0, max_value=100.0, value=0.0, step=1.0, label_visibility="collapsed")
-                    with cols[2]:
-                        st.write(f"{irr:.2f}" if np.isfinite(irr) else "—")
-                    with cols[3]:
-                        st.write(f"{md:.2f}" if np.isfinite(md) else "—")
-                    with cols[4]:
-                        st.write(f"{price:.2f}" if np.isfinite(price) else "—")
+                    with cols[2]: st.write(f"{irr:.2f}" if np.isfinite(irr) else "—")
+                    with cols[3]: st.write(f"{md:.2f}" if np.isfinite(md) else "—")
+                    with cols[4]: st.write(f"{price:.2f}" if np.isfinite(price) else "—")
         
-                    items.append({
-                        "ticker": tk, "obj": o,
-                        "w_pct": w, "irr_pct": irr, "md": md, "price": price
-                    })
+                    items.append({"ticker": tk, "obj": o, "w_pct": w, "irr_pct": irr, "md": md, "price": price})
         
-                # normalizar pesos (si no suman 100, normalizo a 100)
+                # normalizar pesos
                 w_sum = sum(x["w_pct"] for x in items)
                 if w_sum <= 0:
                     st.warning("Poné al menos un peso mayor a 0.")
@@ -3227,50 +3292,66 @@ def main():
                     for x in items:
                         x["w"] = x["w_pct"] / w_sum
         
-                    # 2) TIR ponderada: promedio por peso de cartera
-                    tir_port = sum(x["w"] * x["irr_pct"] for x in items if np.isfinite(x["irr_pct"]))
+                    # detectar unidad de tasa y bps
+                    irr_sample = next((x["irr_pct"] for x in items if np.isfinite(x["irr_pct"])), float("nan"))
+                    unit = _detect_yield_unit(irr_sample)
+                    bump_pp = unit["bump_pp"]            # para pasar al pricer (si xirr está en % -> 0.10 pp)
+                    bump_decimal = unit["bump_decimal"]  # 0.001 (=10 bps) en decimal para fórmula de MD
         
-                    # 3) MD ponderada: promedio por peso de cartera
-                    md_port = sum(x["w"] * x["md"] for x in items if np.isfinite(x["md"]))
+                    # Precio de mercado por 100 VN (ponderado)
+                    P0_100 = sum(x["w"] * x["price"] for x in items if np.isfinite(x["price"]))
         
-                    # 4) DVO1 para +0,10% (10 bps) de tasa:
-                    #    Reprecio cada activo a irr+0.10 pp con tu helper _any_price_from_yield
-                    dvo1_10bp = 0.0  # ΔPrecio (por 100 VN) de la CARPETA ante +10 bps
+                    # ---- IRR de cartera (estricta) ----
+                    irr_port_strict = _solve_portfolio_irr_strict(items, unit)
+        
+                    # ---- MD de cartera (estricta, por diferencia finita) ----
+                    # Aplicamos +10 bps a CADA bono en su yield actual (paralelo) y medimos ΔP
+                    # P_up_100: precio por 100 VN luego del bump
+                    P_up_100 = 0.0
                     for x in items:
-                        irr0 = x["irr_pct"]
-                        p0   = x["price"]
+                        irr0, p0 = x["irr_pct"], x["price"]
                         if np.isfinite(irr0) and np.isfinite(p0):
                             try:
-                                p_up = _any_price_from_yield(x["obj"], irr0 + 0.10)  # irr + 0.10 pp
-                                if np.isfinite(p_up):
-                                    dP = p_up - p0
-                                    dvo1_10bp += x["w"] * dP
+                                p_up = _any_price_from_yield(x["obj"], irr0 + bump_pp)
                             except Exception:
-                                pass
+                                p_up = float("nan")
+                            if np.isfinite(p_up):
+                                P_up_100 += x["w"] * p_up
         
-                    # (opcional) DVO1 aproximada con MD: dP ≈ -MD * P * Δy
-                    # dvo1_md_aprox = sum(x["w"] * ( - x["md"] * x["price"] * 0.001 ) for x in items
-                    #                     if np.isfinite(x["md"]) and np.isfinite(x["price"]))
+                    dP_100 = P_up_100 - P0_100
+                    # MD estricta:  - (ΔP/P0) / Δy_decimal
+                    md_port_strict = float("nan")
+                    if np.isfinite(P0_100) and P0_100 > 0:
+                        md_port_strict = - (dP_100 / P0_100) / bump_decimal
+        
+                    # ---- DV01 y ΔP escalados al monto ----
+                    deltaP_10bp_total = dP_100 * (monto_nominal / 100.0)   # ΔP total ante +10 bps
+                    dv01_total_1bp    = deltaP_10bp_total / 10.0           # por 1 bp
         
                     st.divider()
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("TIR Ponderada (EA)", f"{tir_port:.2f}%")
-                    c2.metric("Modified Duration (años)", f"{md_port:.2f}")
-                    # Mostrar DVO1 de 10 bps (signo negativo si sube la tasa y cae precio)
-                    c3.metric("DVO1 (ΔP por +0,10%)", f"{dvo1_10bp:.3f} por 100 VN")
+                    c1, c2, c3, c4 = st.columns(4)
+                    # IRR: mostrar en % si la unidad detectada es %
+                    if np.isfinite(irr_port_strict):
+                        irr_label = f"{irr_port_strict:.2f}%" if unit["in_percent"] else f"{100*irr_port_strict:.2f}%"
+                    else:
+                        irr_label = "—"
+                    c1.metric("IRR de Cartera (estricta)", irr_label)
+                    c2.metric("Modified Duration de Cartera (estricta, años)", f"{md_port_strict:.2f}" if np.isfinite(md_port_strict) else "—")
+                    c3.metric("ΔP total (+10 bps)", f"{deltaP_10bp_total:,.2f}")
+                    c4.metric("DV01 total (1 bp)", f"{dv01_total_1bp:,.2f}")
         
-                    # Tabla de detalle
-                    import pandas as pd
+                    # ---- Detalle por instrumento ----
                     df_det = pd.DataFrame([{
                         "Ticker": x["ticker"],
                         "Peso %": round(x["w"]*100, 2),
                         "Precio": round(x["price"], 2) if np.isfinite(x["price"]) else np.nan,
-                        "TIR (EA, %)": round(x["irr_pct"], 2) if np.isfinite(x["irr_pct"]) else np.nan,
+                        "TIR (EA, %)": round(x["irr_pct"], 2) if unit["in_percent"] and np.isfinite(x["irr_pct"]) else (round(100*x["irr_pct"], 2) if np.isfinite(x["irr_pct"]) else np.nan),
                         "MD (años)": round(x["md"], 3) if np.isfinite(x["md"]) else np.nan
                     } for x in items])
                     st.dataframe(df_det, use_container_width=True)
             else:
                 st.caption("Seleccioná al menos un activo para armar la cartera.")
+
 
     elif page == "Lecaps - Boncaps":
         st.title("LECAPs / BONCAPs")
