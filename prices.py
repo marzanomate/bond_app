@@ -3145,132 +3145,132 @@ def main():
             )
         else:
             st.info("No hay bonos para los emisores seleccionados.")
-    # ================================
-    # Portfolio Builder — Bonos HD
-    # (pegar debajo de "Curves")
-    # ================================
-    st.markdown("### 🧺 Portfolio Bonos HD")
-    
-    # 1) Armar universo de objetos disponibles (dict ticker -> objeto)
-    #    Ajustá estas fuentes según tu sección Bonos HD.
-    objs_universo: dict[str, Any] = {}
-    
-    # Ejemplos de mapas ya existentes en tu app. Incluí solo los que uses en Bonos HD.
-    # - bcp_map: bonos ARS (bond_calculator_pro) que ya armás en build_extra_ars_bonds_for_lecaps
-    # - le_map: LECAPs/BONCAPs (lecaps) si los mostrás en HD
-    # - cer_map: bonos CER (cer_bonos) si forman parte de HD
-    for m in (
-        globals().get("bcp_map", {}),      # {'TO26': bond_calculator_pro(...), ...}
-        globals().get("le_map", {}),       # {'M10N5': lecaps(...), ...}
-        globals().get("cer_map", {}),      # {'TX26': cer_bonos(...), ...} (si corresponde)
-    ):
-        if isinstance(m, dict):
-            objs_universo.update({k: v for k, v in m.items() if v is not None})
-    
-    if not objs_universo:
-        st.info("No encontré objetos de bonos para la cartera. Asegurate de construir los mapas (bcp_map/le_map/cer_map) antes de este bloque.")
-    else:
-        tickers = sorted(objs_universo.keys())
-        sel = st.multiselect(
-            "Elegí activos de la cartera",
-            options=tickers,
-            default=[],
-            help="Podés combinar cualquier instrumento disponible en esta sección."
-        )
-    
-        if sel:
-            st.write("Ingresá los pesos de la cartera (suman 100%).")
-            cols = st.columns([2,1,1,1,1])
-            cols[0].markdown("**Ticker**")
-            cols[1].markdown("**Peso %**")
-            cols[2].markdown("**TIR (EA, %)**")
-            cols[3].markdown("**MD (años)**")
-            cols[4].markdown("**Precio**")
-    
-            # inputs de pesos y captura de métricas por activo
-            items = []
-            for tk in sel:
-                o = objs_universo[tk]
-                # métricas base
-                try:
-                    irr = float(o.xirr())                # % EA
-                except Exception:
-                    irr = float("nan")
-                try:
-                    md = float(o.modified_duration())    # años
-                except Exception:
-                    md = float("nan")
-                price = float(getattr(o, "price", float("nan")))
-    
-                # UI de peso
-                with cols[0]:
-                    st.write(tk)
-                with cols[1]:
-                    w = st.number_input(f"w_{tk}", min_value=0.0, max_value=100.0, value=0.0, step=1.0, label_visibility="collapsed")
-                with cols[2]:
-                    st.write(f"{irr:.2f}" if np.isfinite(irr) else "—")
-                with cols[3]:
-                    st.write(f"{md:.2f}" if np.isfinite(md) else "—")
-                with cols[4]:
-                    st.write(f"{price:.2f}" if np.isfinite(price) else "—")
-    
-                items.append({
-                    "ticker": tk, "obj": o,
-                    "w_pct": w, "irr_pct": irr, "md": md, "price": price
-                })
-    
-            # normalizar pesos (si no suman 100, normalizo a 100)
-            w_sum = sum(x["w_pct"] for x in items)
-            if w_sum <= 0:
-                st.warning("Poné al menos un peso mayor a 0.")
-            else:
-                for x in items:
-                    x["w"] = x["w_pct"] / w_sum
-    
-                # 2) TIR ponderada: promedio por peso de cartera
-                tir_port = sum(x["w"] * x["irr_pct"] for x in items if np.isfinite(x["irr_pct"]))
-    
-                # 3) MD ponderada: promedio por peso de cartera
-                md_port = sum(x["w"] * x["md"] for x in items if np.isfinite(x["md"]))
-    
-                # 4) DVO1 para +0,10% (10 bps) de tasa:
-                #    Reprecio cada activo a irr+0.10 pp con tu helper _any_price_from_yield
-                dvo1_10bp = 0.0  # ΔPrecio (por 100 VN) de la CARPETA ante +10 bps
-                for x in items:
-                    irr0 = x["irr_pct"]
-                    p0   = x["price"]
-                    if np.isfinite(irr0) and np.isfinite(p0):
-                        try:
-                            p_up = _any_price_from_yield(x["obj"], irr0 + 0.10)  # irr + 0.10 pp
-                            if np.isfinite(p_up):
-                                dP = p_up - p0
-                                dvo1_10bp += x["w"] * dP
-                        except Exception:
-                            pass
-    
-                # (opcional) DVO1 aproximada con MD: dP ≈ -MD * P * Δy
-                # dvo1_md_aprox = sum(x["w"] * ( - x["md"] * x["price"] * 0.001 ) for x in items
-                #                     if np.isfinite(x["md"]) and np.isfinite(x["price"]))
-    
-                st.divider()
-                c1, c2, c3 = st.columns(3)
-                c1.metric("TIR Ponderada (EA)", f"{tir_port:.2f}%")
-                c2.metric("Modified Duration (años)", f"{md_port:.2f}")
-                # Mostrar DVO1 de 10 bps (signo negativo si sube la tasa y cae precio)
-                c3.metric("DVO1 (ΔP por +0,10%)", f"{dvo1_10bp:.3f} por 100 VN")
-    
-                # Tabla de detalle
-                import pandas as pd
-                df_det = pd.DataFrame([{
-                    "Ticker": x["ticker"],
-                    "Peso %": round(x["w"]*100, 2),
-                    "Precio": round(x["price"], 2) if np.isfinite(x["price"]) else np.nan,
-                    "TIR (EA, %)": round(x["irr_pct"], 2) if np.isfinite(x["irr_pct"]) else np.nan,
-                    "MD (años)": round(x["md"], 3) if np.isfinite(x["md"]) else np.nan
-                } for x in items])
-                st.dataframe(df_det, use_container_width=True)
+        # ================================
+        # Portfolio Builder — Bonos HD
+        # (pegar debajo de "Curves")
+        # ================================
+        st.markdown("### 🧺 Portfolio Bonos HD")
+        
+        # 1) Armar universo de objetos disponibles (dict ticker -> objeto)
+        #    Ajustá estas fuentes según tu sección Bonos HD.
+        objs_universo: dict[str, Any] = {}
+        
+        # Ejemplos de mapas ya existentes en tu app. Incluí solo los que uses en Bonos HD.
+        # - bcp_map: bonos ARS (bond_calculator_pro) que ya armás en build_extra_ars_bonds_for_lecaps
+        # - le_map: LECAPs/BONCAPs (lecaps) si los mostrás en HD
+        # - cer_map: bonos CER (cer_bonos) si forman parte de HD
+        for m in (
+            globals().get("bcp_map", {}),      # {'TO26': bond_calculator_pro(...), ...}
+            globals().get("le_map", {}),       # {'M10N5': lecaps(...), ...}
+            globals().get("cer_map", {}),      # {'TX26': cer_bonos(...), ...} (si corresponde)
+        ):
+            if isinstance(m, dict):
+                objs_universo.update({k: v for k, v in m.items() if v is not None})
+        
+        if not objs_universo:
+            st.info("No encontré objetos de bonos para la cartera. Asegurate de construir los mapas (bcp_map/le_map/cer_map) antes de este bloque.")
         else:
-            st.caption("Seleccioná al menos un activo para armar la cartera.")
+            tickers = sorted(objs_universo.keys())
+            sel = st.multiselect(
+                "Elegí activos de la cartera",
+                options=tickers,
+                default=[],
+                help="Podés combinar cualquier instrumento disponible en esta sección."
+            )
+        
+            if sel:
+                st.write("Ingresá los pesos de la cartera (suman 100%).")
+                cols = st.columns([2,1,1,1,1])
+                cols[0].markdown("**Ticker**")
+                cols[1].markdown("**Peso %**")
+                cols[2].markdown("**TIR (EA, %)**")
+                cols[3].markdown("**MD (años)**")
+                cols[4].markdown("**Precio**")
+        
+                # inputs de pesos y captura de métricas por activo
+                items = []
+                for tk in sel:
+                    o = objs_universo[tk]
+                    # métricas base
+                    try:
+                        irr = float(o.xirr())                # % EA
+                    except Exception:
+                        irr = float("nan")
+                    try:
+                        md = float(o.modified_duration())    # años
+                    except Exception:
+                        md = float("nan")
+                    price = float(getattr(o, "price", float("nan")))
+        
+                    # UI de peso
+                    with cols[0]:
+                        st.write(tk)
+                    with cols[1]:
+                        w = st.number_input(f"w_{tk}", min_value=0.0, max_value=100.0, value=0.0, step=1.0, label_visibility="collapsed")
+                    with cols[2]:
+                        st.write(f"{irr:.2f}" if np.isfinite(irr) else "—")
+                    with cols[3]:
+                        st.write(f"{md:.2f}" if np.isfinite(md) else "—")
+                    with cols[4]:
+                        st.write(f"{price:.2f}" if np.isfinite(price) else "—")
+        
+                    items.append({
+                        "ticker": tk, "obj": o,
+                        "w_pct": w, "irr_pct": irr, "md": md, "price": price
+                    })
+        
+                # normalizar pesos (si no suman 100, normalizo a 100)
+                w_sum = sum(x["w_pct"] for x in items)
+                if w_sum <= 0:
+                    st.warning("Poné al menos un peso mayor a 0.")
+                else:
+                    for x in items:
+                        x["w"] = x["w_pct"] / w_sum
+        
+                    # 2) TIR ponderada: promedio por peso de cartera
+                    tir_port = sum(x["w"] * x["irr_pct"] for x in items if np.isfinite(x["irr_pct"]))
+        
+                    # 3) MD ponderada: promedio por peso de cartera
+                    md_port = sum(x["w"] * x["md"] for x in items if np.isfinite(x["md"]))
+        
+                    # 4) DVO1 para +0,10% (10 bps) de tasa:
+                    #    Reprecio cada activo a irr+0.10 pp con tu helper _any_price_from_yield
+                    dvo1_10bp = 0.0  # ΔPrecio (por 100 VN) de la CARPETA ante +10 bps
+                    for x in items:
+                        irr0 = x["irr_pct"]
+                        p0   = x["price"]
+                        if np.isfinite(irr0) and np.isfinite(p0):
+                            try:
+                                p_up = _any_price_from_yield(x["obj"], irr0 + 0.10)  # irr + 0.10 pp
+                                if np.isfinite(p_up):
+                                    dP = p_up - p0
+                                    dvo1_10bp += x["w"] * dP
+                            except Exception:
+                                pass
+        
+                    # (opcional) DVO1 aproximada con MD: dP ≈ -MD * P * Δy
+                    # dvo1_md_aprox = sum(x["w"] * ( - x["md"] * x["price"] * 0.001 ) for x in items
+                    #                     if np.isfinite(x["md"]) and np.isfinite(x["price"]))
+        
+                    st.divider()
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("TIR Ponderada (EA)", f"{tir_port:.2f}%")
+                    c2.metric("Modified Duration (años)", f"{md_port:.2f}")
+                    # Mostrar DVO1 de 10 bps (signo negativo si sube la tasa y cae precio)
+                    c3.metric("DVO1 (ΔP por +0,10%)", f"{dvo1_10bp:.3f} por 100 VN")
+        
+                    # Tabla de detalle
+                    import pandas as pd
+                    df_det = pd.DataFrame([{
+                        "Ticker": x["ticker"],
+                        "Peso %": round(x["w"]*100, 2),
+                        "Precio": round(x["price"], 2) if np.isfinite(x["price"]) else np.nan,
+                        "TIR (EA, %)": round(x["irr_pct"], 2) if np.isfinite(x["irr_pct"]) else np.nan,
+                        "MD (años)": round(x["md"], 3) if np.isfinite(x["md"]) else np.nan
+                    } for x in items])
+                    st.dataframe(df_det, use_container_width=True)
+            else:
+                st.caption("Seleccioná al menos un activo para armar la cartera.")
 
     elif page == "Lecaps - Boncaps":
         st.title("LECAPs / BONCAPs")
