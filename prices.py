@@ -3152,38 +3152,35 @@ def main():
         # ---- helpers de cartera ----
         def _detect_yield_unit(irr_sample: float) -> dict:
             """Detecta si irr está en % o en decimal y define bump de 10 bps y Δy_decimal."""
-            if not np.isfinite(irr_sample):
-                # fallback: asumir % (común en tu app)
+            # fallback: asumir % si no hay muestra válida
+            if not (isinstance(irr_sample, (int, float)) and np.isfinite(irr_sample)):
                 return {"in_percent": True, "bump_pp": 0.10, "bump_decimal": 0.001}
-            in_percent = abs(irr_sample) > 1.5  # heurística
+            in_percent = abs(irr_sample) > 1.5  # heurística simple
             if in_percent:
                 return {"in_percent": True, "bump_pp": 0.10, "bump_decimal": 0.001}   # 10 bps
             else:
                 return {"in_percent": False, "bump_pp": 0.001, "bump_decimal": 0.001} # 10 bps
-        
-        def _solve_portfolio_irr_strict(items: list[dict], unit: dict) -> float | float("nan"):
+                
+        def _solve_portfolio_irr_strict(items: list[dict], unit: dict) -> float:
             """
             IRR estricta: hallar y* tal que sum(w_i * Price_i(y*)) == sum(w_i * Price_i(mkt)) por 100 VN.
-            Usa bisección sobre un rango amplio en la unidad detectada (pp si %; decimal si no).
+            Usa bisección; devuelve np.nan si no se puede resolver.
             """
-            # Precio de mercado por 100 VN (ponderado)
-            target_p = sum(x["w"] * x["price"] for x in items if np.isfinite(x["price"]))
-            if not np.isfinite(target_p) or target_p <= 0:
+            target_p = sum(x["w"] * x.get("price", np.nan) for x in items if np.isfinite(x.get("price", np.nan)))
+            if not (isinstance(target_p, (int, float)) and np.isfinite(target_p) and target_p > 0):
                 return float("nan")
         
-            # Rango de búsqueda (pp si en %; decimal si no)
-            irr_vals = [x["irr_pct"] for x in items if np.isfinite(x["irr_pct"])]
+            irr_vals = [x.get("irr_pct", np.nan) for x in items if np.isfinite(x.get("irr_pct", np.nan))]
             if not irr_vals:
                 return float("nan")
-            lo = min(irr_vals); hi = max(irr_vals)
+            lo, hi = min(irr_vals), max(irr_vals)
             # ampliar el rango
-            if unit["in_percent"]:
+            if unit.get("in_percent", True):
                 lo -= 10.0; hi += 10.0
             else:
-                lo = max(lo - 0.10, 1e-6); hi = hi + 0.10
+                lo = max(lo - 0.10, 1e-6); hi += 0.10
         
-            def f(y):
-                # precio teórico de cartera a y
+            def f(y: float) -> float:
                 s = 0.0
                 for x in items:
                     try:
@@ -3194,21 +3191,18 @@ def main():
                         s += x["w"] * py
                 return s - target_p
         
-            # asegurar que el bracket cambie de signo; si no, expandir un poco
-            f_lo = f(lo); f_hi = f(hi)
+            f_lo, f_hi = f(lo), f(hi)
             tries = 0
             while (not np.isfinite(f_lo) or not np.isfinite(f_hi) or f_lo * f_hi > 0) and tries < 6:
-                # expandir
-                if unit["in_percent"]:
+                if unit.get("in_percent", True):
                     lo -= 10.0; hi += 10.0
                 else:
                     lo = max(lo - 0.10, 1e-6); hi += 0.10
-                f_lo = f(lo); f_hi = f(hi)
+                f_lo, f_hi = f(lo), f(hi)
                 tries += 1
             if not (np.isfinite(f_lo) and np.isfinite(f_hi) and f_lo * f_hi <= 0):
                 return float("nan")
         
-            # bisección
             for _ in range(60):
                 mid = 0.5 * (lo + hi)
                 fm = f(mid)
@@ -3217,9 +3211,9 @@ def main():
                 if abs(fm) < 1e-6:
                     return mid
                 if f_lo * fm <= 0:
-                    hi = mid; f_hi = fm
+                    hi, f_hi = mid, fm
                 else:
-                    lo = mid; f_lo = fm
+                    lo, f_lo = mid, fm
             return 0.5 * (lo + hi)
         
         # 1) Universo de objetos disponibles (dict ticker -> objeto)
@@ -3263,6 +3257,26 @@ def main():
                 cols[4].markdown("**Precio**")
         
                 items = []
+                items = [x for x in items if np.isfinite(x["price"]) and x["price"] > 0 and np.isfinite(x["irr_pct"])]
+
+                w_sum = sum(x["w_pct"] for x in items)
+                if w_sum <= 0 or not items:
+                    st.warning("Poné al menos un peso > 0 y elegí bonos con precio válido.")
+                    st.stop()
+                for x in items:
+                    x["w"] = x["w_pct"] / w_sum
+                
+                irr_sample = next((x["irr_pct"] for x in items if np.isfinite(x["irr_pct"])), float("nan"))
+                unit = _detect_yield_unit(irr_sample)
+                bump_pp = unit["bump_pp"]
+                bump_decimal = unit["bump_decimal"] if unit["bump_decimal"] != 0 else 1e-6  # evita /0
+                
+                # Precio de mercado por 100 VN (ponderado)
+                P0_100 = sum(x["w"] * x["price"] for x in items if np.isfinite(x["price"]) and x["price"] > 0)
+                if not (np.isfinite(P0_100) and P0_100 > 0):
+                    st.warning("No se pudo calcular el precio de la cartera (P0). Revisá precios.")
+                    st.stop()
+                    
                 for tk in sel:
                     o = objs_universo[tk]
                     try:
@@ -3309,20 +3323,16 @@ def main():
                     # P_up_100: precio por 100 VN luego del bump
                     P_up_100 = 0.0
                     for x in items:
-                        irr0, p0 = x["irr_pct"], x["price"]
-                        if np.isfinite(irr0) and np.isfinite(p0):
-                            try:
-                                p_up = _any_price_from_yield(x["obj"], irr0 + bump_pp)
-                            except Exception:
-                                p_up = float("nan")
-                            if np.isfinite(p_up):
-                                P_up_100 += x["w"] * p_up
-        
+                        try:
+                            p_up = _any_price_from_yield(x["obj"], x["irr_pct"] + bump_pp)
+                        except Exception:
+                            p_up = float("nan")
+                        if np.isfinite(p_up):
+                            P_up_100 += x["w"] * p_up
+                    
                     dP_100 = P_up_100 - P0_100
-                    # MD estricta:  - (ΔP/P0) / Δy_decimal
-                    md_port_strict = float("nan")
-                    if np.isfinite(P0_100) and P0_100 > 0:
-                        md_port_strict = - (dP_100 / P0_100) / bump_decimal
+                    md_port_strict = - (dP_100 / P0_100) / bump_decimal  # P0_100 > 0 y bump_decimal > 0 ya garantizados
+
         
                     # ---- DV01 y ΔP escalados al monto ----
                     deltaP_10bp_total = dP_100 * (monto_nominal / 100.0)   # ΔP total ante +10 bps
