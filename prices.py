@@ -2773,14 +2773,6 @@ cer_rows = [
     ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER"),
 ]
 
-dlk_rows = [
-    ("D31O5", "10/07/2025", "31/10/2025", "Dolar Linked"),
-    ("D28N5", "30/09/2025", "28/11/2025", "Dolar Linked"),
-    ("TZVD5", "01/07/2024", "15/12/2025", "Dolar Linked"),
-    ("D16E6", "28/04/2025", "16/01/2026", "Dolar Linked"),
-    ("D30A6", "30/09/2025", "30/04/2026", "Dolar Linked"),
-    ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked")
-]
 
 # --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
 def render_sidebar_info():
