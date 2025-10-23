@@ -1929,6 +1929,7 @@ def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
 
     return val if pd.notna(val) else np.nan
 
+@st.cache_data(show_spinner=False)
 def build_lecaps_metrics(rows, df_all, today=None):
     import pandas as pd, numpy as np
 
@@ -2021,7 +2022,8 @@ def build_lecaps_metrics(rows, df_all, today=None):
         "Duration","Modified Duration"
     ]
     return pd.DataFrame(out)[cols]
-
+    
+@st.cache_resource(show_spinner=False)
 def build_lecaps_objects(rows, df_all_norm) -> dict[str, lecaps]:
     """
     Crea objetos 'lecaps' a partir de LECAPS_ROWS y precios de mercado
@@ -2757,6 +2759,8 @@ LECAPS_ROWS = [
     ("TTD26","15/12/2026","29/01/2025", 2.14, "Fija")
 ]
 
+LECAPS_VERSION = _salt(LECAPS_ROWS)
+
 # --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
 def render_sidebar_info():
     GITHUB_USER = "marzanomate"  # <-- cambialo
@@ -2816,14 +2820,13 @@ def main():
             df_all, df_mep = pd.DataFrame(), pd.DataFrame()
 
     if st.sidebar.button("🔄 Actualizar ahora"):
-        load_market_data.clear()
         try:
-            build_lecaps_metrics.clear()
-            build_lecaps_objects.clear()
-            # si tenés helpers extra:
-            # build_extra_ars_bonds_for_lecaps.clear()
+            # clear all cache layers
+            st.cache_data.clear()
+            st.cache_resource.clear()
         except Exception:
             pass
+        st.rerun()
         with st.spinner("Actualizando..."):
             try:
                 df_all, df_mep = load_market_data()
@@ -3131,7 +3134,7 @@ def main():
     
         # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
-        df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
+        df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm, _version=LECAPS_VERSION)
         df_extra_bonos, bcp_map = build_extra_ars_bonds_for_lecaps(df_all_norm)
         df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
@@ -3140,7 +3143,7 @@ def main():
     
         # ---------- Objetos para cálculos (solo LECAPs) ----------
 
-        le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm)
+        le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm, _version=LECAPS_VERSION)
     
         st.divider()
         st.subheader("Precio ↔ Rendimiento (LECAPs/BONCAPs)")
