@@ -11,7 +11,7 @@ from scipy import optimize
 import numpy as np
 import pandas as pd
 import requests
-import json
+import hashlib, json
 import streamlit as st
 from dateutil.relativedelta import relativedelta
 from requests.adapters import HTTPAdapter, Retry
@@ -24,6 +24,12 @@ from requests.exceptions import HTTPError, RequestException, ConnectTimeout, Rea
 import os
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def _salt(obj) -> str:
+    try:
+        return hashlib.md5(json.dumps(obj, ensure_ascii=False).encode()).hexdigest()
+    except Exception:
+        return str(hash(str(obj)))
 
 # =========================
 # Config Streamlit
