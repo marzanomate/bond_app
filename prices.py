@@ -25,12 +25,6 @@ import os
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def _salt(obj) -> str:
-    try:
-        return hashlib.md5(json.dumps(obj, ensure_ascii=False).encode()).hexdigest()
-    except Exception:
-        return str(hash(str(obj)))
-
 # =========================
 # Config Streamlit
 # =========================
@@ -2740,7 +2734,6 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 # ------------------------
 
 LECAPS_ROWS = [
-    #("T17O5","17/10/2025","14/10/2024",3.90, "Fija"),
     ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
     ("S10N5", "10/11/2025","31/01/2025", 2.2, "Fija"),
     ("S28N5","28/11/2025","14/2/2025",2.26, "Fija"),
@@ -2758,8 +2751,6 @@ LECAPS_ROWS = [
     ("TTS26","15/9/2026","29/01/2025", 2.17, "Fija"),
     ("TTD26","15/12/2026","29/01/2025", 2.14, "Fija")
 ]
-
-LECAPS_VERSION = _salt(LECAPS_ROWS)
 
 # --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
 def render_sidebar_info():
@@ -3134,7 +3125,7 @@ def main():
     
         # Normalizar y armar tabla (precios ASK*1.005 ya aplicados en build_lecaps_metrics si hiciste el ajuste anterior)
         df_all_norm = normalize_market_df(df_all)
-        df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm, _version=LECAPS_VERSION)
+        df_lecaps = build_lecaps_metrics(LECAPS_ROWS, df_all_norm)
         df_extra_bonos, bcp_map = build_extra_ars_bonds_for_lecaps(df_all_norm)
         df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
@@ -3143,7 +3134,7 @@ def main():
     
         # ---------- Objetos para cálculos (solo LECAPs) ----------
 
-        le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm, _version=LECAPS_VERSION)
+        le_map = build_lecaps_objects(LECAPS_ROWS, df_all_norm)
     
         st.divider()
         st.subheader("Precio ↔ Rendimiento (LECAPs/BONCAPs)")
