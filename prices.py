@@ -2834,6 +2834,13 @@ def main():
 
     if st.sidebar.button("🔄 Actualizar ahora"):
         load_market_data.clear()
+        try:
+            build_lecaps_metrics.clear()
+            build_lecaps_objects.clear()
+            # si tenés helpers extra:
+            # build_extra_ars_bonds_for_lecaps.clear()
+        except Exception:
+            pass
         with st.spinner("Actualizando..."):
             try:
                 df_all, df_mep = load_market_data()
