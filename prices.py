@@ -1635,7 +1635,7 @@ def _one_row_from_obj(o, tipo: str) -> dict:
         "MD": round(md, 2) if np.isfinite(md) else np.nan,
         "Pago Final": _pago_final_from_obj(o),
     }
-
+@st.cache_data(ttl=300)
 def _summarize_objects_table(objs: list, tipo: str) -> pd.DataFrame:
     """Arma la tabla ordenada por vencimiento para cualquier lista de objetos."""
     rows = [_one_row_from_obj(o, tipo) for o in objs]
@@ -1649,7 +1649,7 @@ def _summarize_objects_table(objs: list, tipo: str) -> pd.DataFrame:
     cols = ["Ticker", "Tipo", "Vencimiento", "Días al vencimiento", "Precio",
             "TIREA", "Dur", "MD", "Pago Final"]
     return df[[c for c in cols if c in df.columns]]
-
+@st.cache_data(ttl=300)
 # --------- (Opcional) Resumen específico CER Bonos ----------
 def _summarize_cer_bonds(bonds):
     """
@@ -1726,7 +1726,7 @@ def load_market_data():
 
     df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
     return df_all, df_mep
-
+@st.cache_data(ttl=300)
 def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> float:
     def _pick(row):
         if prefer in row and pd.notna(row[prefer]): return float(row[prefer])
@@ -1819,7 +1819,7 @@ def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer
 # =========================
 # Tabla de métricas
 # =========================
-
+@st.cache_data(ttl=300)
 def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame:
     rows = []
     stl = settlement
@@ -2076,7 +2076,7 @@ def _tna30_tem_from_irr_ea(irr_pct: float):
 # ----------------------------------------------------------------------------
 #  Agrego TO26/BONTE
 # ----------------------------------------------------------------------------
-
+@st.cache_data(ttl=300)
 def build_extra_ars_bonds_for_lecaps(df_all_norm):
     """
     Crea TY30P y TO26 usando bond_calculator_pro y devuelve:
@@ -2160,6 +2160,7 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm):
 # ------------------------------------------------------------------
 # CER Metrics
 # ------------------------------------------------------------------
+@st.cache_data(ttl=300)
 def build_cer_rows_metrics(rows, df_all, cer_final, today=None):
     """
     Process CER bond data to calculate financial metrics.
@@ -2307,7 +2308,7 @@ def build_cer_rows_metrics(rows, df_all, cer_final, today=None):
 # -------------------------------------------------------------
 # DLK Metrics
 # -------------------------------------------------------------
-
+@st.cache_data(ttl=300)
 def build_dlk_metrics(rows, df_all, fx_value, today=None):
     # rows: (Ticker, Emision, Vencimiento, Tipo)
     df_spec = pd.DataFrame(rows, columns=["Ticker","Emision","Vencimiento","Tipo"])
