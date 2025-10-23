@@ -3619,22 +3619,19 @@ def main():
         
         dlk_objs = []
         for tk, emi, vto, _ in dlk_rows:
-            try:
-                price = get_price_for_symbol(df_all_norm, tk, prefer="px_ask")
-            except Exception:
-                price = np.nan
+            price = pd.to_numeric(get_price_for_symbol(df_all_norm, tk, prefer="px_ask"), errors="coerce")
             try:
                 dlk_objs.append(
                     dlk(
                         name=tk,
                         start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
-                        end_date=pd.to_datetime(vto, dayfirst=True).to_pydatetime(),
-                        oficial=oficial_fx,   # ✅ ahora soportado por el __init__
-                        price=float(price),
+                        end_date=pd.to_datetime(vto,  dayfirst=True).to_pydatetime(),
+                        oficial=oficial_fx,
+                        price=(float(price) if np.isfinite(price) else np.nan),
                     )
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                st.warning(f"DLK {tk} no se pudo construir: {e}")
         # ---------- TAMAR (rows → objetos lecaps) ----------
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
