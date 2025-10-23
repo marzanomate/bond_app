@@ -3611,6 +3611,7 @@ def main():
     
 
             # ---------- DLK (usa oficial t-1) ----------
+        # ---------- DLK (siempre mostrar todos los tickers) ----------
         dlk_rows = [
             ("D31O5", "10/07/2025", "31/10/2025", "Dólar Linked"),
             ("D28N5", "30/09/2025", "28/11/2025", "Dólar Linked"),
@@ -3620,25 +3621,69 @@ def main():
             ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
         ]
         
-        oficial_fx = float(fetch_dolares().assign(_k=lambda d: d.iloc[:,0].astype(str).str.lower(),
-                                          _v=lambda d: pd.to_numeric(d.filter(regex='(?i)^venta$').iloc[:,0], errors='coerce')
-                                         ).loc[lambda d: d._k=='oficial','_v'].iloc[-1])
+        def _price_any(df_all_norm, sym, prefer="px_ask"):
+            for alias in (sym, f"{sym}=BA", f"AR{sym}=IAMC"):
+                try:
+                    p = get_price_for_symbol(df_all_norm, alias, prefer=prefer)
+                    p = float(pd.to_numeric(p, errors="coerce"))
+                    if np.isfinite(p) and p > 0:
+                        return p
+                except Exception:
+                    pass
+            return np.nan
         
-        dlk_objs = []
-        for tk, emi, vto, _ in dlk_rows:
-            price = pd.to_numeric(get_price_for_symbol(df_all_norm, tk, prefer="px_ask"), errors="coerce")
+        dlk_objs = []  # por si los querés usar después
+        rows_tbl = []
+        
+        for tk, emi, vto, tipo in dlk_rows:
+            price = _price_any(df_all_norm, tk, prefer="px_ask")
+            vto_dt = pd.to_datetime(vto, dayfirst=True, errors="coerce")
+            dias   = (vto_dt.normalize() - pd.Timestamp.today().normalize()).days if pd.notna(vto_dt) else np.nan
+        
+            # default: sin métricas
+            tirea = dur = md = np.nan
+        
+            # intentar construir el objeto; si falla, igual agregamos fila
             try:
-                dlk_objs.append(
-                    dlk(
-                        name=tk,
-                        start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
-                        end_date=pd.to_datetime(vto,  dayfirst=True).to_pydatetime(),
-                        oficial=oficial_fx,
-                        price=(float(price) if np.isfinite(price) else np.nan),
-                    )
+                obj = dlk(
+                    name=tk,
+                    start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
+                    end_date=vto_dt.to_pydatetime(),
+                    oficial=float(oficial_fx),
+                    price=price if np.isfinite(price) else np.nan,
                 )
+                dlk_objs.append(obj)
+                # solo si hay precio calculamos métricas
+                if np.isfinite(price):
+                    tirea = float(pd.to_numeric(obj.xirr(), errors="coerce"))
+                    dur   = float(pd.to_numeric(obj.duration(), errors="coerce"))
+                    md    = float(pd.to_numeric(obj.modified_duration(), errors="coerce"))
             except Exception as e:
-                st.warning(f"DLK {tk} no se pudo construir: {e}")
+                # seguimos; mostramos la fila igualmente
+                pass
+        
+            rows_tbl.append({
+                "Ticker": tk,
+                "Tipo": tipo,
+                "Vencimiento": vto_dt.strftime("%d/%m/%Y") if pd.notna(vto_dt) else "",
+                "Días al vencimiento": dias,
+                "Precio": price if np.isfinite(price) else None,
+                "TIREA": tirea if np.isfinite(tirea) else None,
+                "Dur":   dur   if np.isfinite(dur)   else None,
+                "MD":    md    if np.isfinite(md)    else None,
+                # Pago Final DLK ~ 100 * Oficial (mostrarlo siempre)
+                "Pago Final": round(100.0 * float(oficial_fx), 0),
+            })
+        
+        df_dlk_table = pd.DataFrame(rows_tbl)
+        st.dataframe(
+            df_dlk_table.style.format({
+                "Precio": "{:.0f}", "TIREA": "{:.2f}", "Dur": "{:.2f}", "MD": "{:.2f}",
+                "Pago Final": "{:.0f}",
+            }),
+            width='stretch', hide_index=True
+        )
+
         # ---------- TAMAR (rows → objetos lecaps) ----------
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
