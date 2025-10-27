@@ -1649,6 +1649,7 @@ def _summarize_objects_table(objs: list, tipo: str) -> pd.DataFrame:
     cols = ["Ticker", "Tipo", "Vencimiento", "Días al vencimiento", "Precio",
             "TIREA", "Dur", "MD", "Pago Final"]
     return df[[c for c in cols if c in df.columns]]
+    
 @st.cache_data(ttl=300)
 # --------- (Opcional) Resumen específico CER Bonos ----------
 def _summarize_cer_bonds(bonds):
@@ -2845,9 +2846,9 @@ def main():
     # --- obtener tipo de cambio oficial (último valor disponible) ---
     try:
         if "Dólar" in fx.columns and "Venta" in fx.columns:
-            s = fx.loc[fx["Dólar"].astype(str).str.lower().eq("oficial"), "Venta"]
+            s = fx.loc[fx["Dólar"].astype(str).str.lower().eq("Oficial"), "Venta"]
         elif "casa" in fx.columns and "venta" in fx.columns:
-            s = fx.loc[fx["casa"].astype(str).str.lower().eq("oficial"), "venta"]
+            s = fx.loc[fx["casa"].astype(str).str.lower().eq("Oficial"), "venta"]
         else:
             s = pd.Series(dtype=float)
     
