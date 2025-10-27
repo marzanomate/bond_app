@@ -3639,7 +3639,7 @@ def main():
                     name=tk,
                     start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
                     end_date=vto_dt.to_pydatetime() if pd.notna(vto_dt) else None,  # <- protege NaT
-                    oficial=float(oficial_fx),
+                    fx=float(oficial_fx),
                     price=float(price) if np.isfinite(price) else np.nan,
                 )
                 dlk_objs.append(obj)
@@ -3660,7 +3660,7 @@ def main():
                 "TIREA":  tirea if np.isfinite(tirea) else np.nan,
                 "Dur":    dur   if np.isfinite(dur)   else np.nan,
                 "MD":     md    if np.isfinite(md)    else np.nan,
-                "Pago Final": round(100.0 * oficial, 0),
+                "Pago Final": round(100.0 * float(oficial_fx), 0),
             })
         
         # # --- SIEMPRE define el DataFrame en este scope ---
