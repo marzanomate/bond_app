@@ -3639,7 +3639,6 @@ def main():
                     name=tk,
                     start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
                     end_date=vto_dt.to_pydatetime() if pd.notna(vto_dt) else None,  # <- protege NaT
-                    fx=float(oficial_fx),
                     price=float(price) if np.isfinite(price) else np.nan,
                 )
                 dlk_objs.append(obj)
