@@ -2308,7 +2308,7 @@ def build_cer_rows_metrics(rows, df_all, cer_final, today=None):
 # -------------------------------------------------------------
 # DLK Metrics
 # -------------------------------------------------------------
-
+@st.cache_data(show_spinner=False)
 def build_dlk_metrics(rows, df_all, fx_value = 1430, today=None):
     # rows: (Ticker, Emision, Vencimiento, Tipo)
     df_spec = pd.DataFrame(rows, columns=["Ticker","Emision","Vencimiento","Tipo"])
@@ -3623,6 +3623,31 @@ def main():
                 except Exception:
                     pass
             return np.nan
+        def get_oficial_fx(fx: pd.DataFrame) -> float:
+            """Extract last 'oficial' FX venta value from any common schema."""
+            try:
+                fx_copy = fx.copy()
+                fx_copy.columns = fx_copy.columns.str.lower().str.strip()
+        
+                if "dólar" in fx_copy.columns and "venta" in fx_copy.columns:
+                    s = fx_copy.loc[fx_copy["dólar"].str.lower() == "oficial", "venta"]
+                elif "casa" in fx_copy.columns and "venta" in fx_copy.columns:
+                    s = fx_copy.loc[fx_copy["casa"].str.lower() == "oficial", "venta"]
+                else:
+                    st.warning("⚠️ No se encontraron columnas 'Dólar'/'casa' y 'Venta'/'venta' en FX.")
+                    return np.nan
+        
+                if s.empty:
+                    st.warning("⚠️ No se encontró fila con 'oficial' en FX.")
+                    return np.nan
+        
+                val = float(pd.to_numeric(s.iloc[-1], errors="coerce"))
+                return val
+            except Exception as e:
+                st.error(f"Error al obtener el tipo de cambio oficial: {e}")
+                return np.nan
+
+        oficial_fx = get_oficial_fx(fx)
         
         dlk_objs = []
         rows_tbl = []
