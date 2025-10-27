@@ -3650,7 +3650,7 @@ def main():
                 "Dur":   dur   if np.isfinite(dur)   else None,
                 "MD":    md    if np.isfinite(md)    else None,
                 # Pago Final DLK ~ 100 * Oficial (mostrarlo siempre)
-                "Pago Final": round(100.0 * float(oficial_fx), 0),
+                "Pago Final": round(100.0 * oficial_fx, 0),
             })
         
         df_dlk_table = pd.DataFrame(rows_tbl)
