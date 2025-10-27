@@ -384,6 +384,7 @@ def fetch_dolares() -> pd.DataFrame:
     return out.dropna(how="all", subset=["Compra", "Venta"])
 
 
+
 # =========================
 # Clase bond_calculator_pro
 # =====================
@@ -1335,13 +1336,11 @@ class cer:
 # -----------------------------------------------------------------------------
 
 class dlk:
-    def __init__(self, name, start_date, end_date, mep=None, oficial=None, price=100.0):
+    def __init__(self, name, start_date, end_date, fx=1430, price=100.0):
         self.name = name
         self.start_date = start_date
         self.end_date = end_date
-        # aceptar ambas variantes; prioridad a 'oficial' si viene
-        fx = oficial if oficial is not None else mep
-        self.fx = float(fx) if fx is not None else float("nan")
+        self.fx = float(fx) 
         self.price = float(price)
         self.settlement = datetime.today() + timedelta(days=1)
         self.calendar = ql.Argentina(ql.Argentina.Merval)
@@ -3623,31 +3622,6 @@ def main():
                 except Exception:
                     pass
             return np.nan
-        def get_oficial_fx(fx: pd.DataFrame) -> float:
-            """Extract last 'oficial' FX venta value from any common schema."""
-            try:
-                fx_copy = fx.copy()
-                fx_copy.columns = fx_copy.columns.str.lower().str.strip()
-        
-                if "dólar" in fx_copy.columns and "venta" in fx_copy.columns:
-                    s = fx_copy.loc[fx_copy["dólar"].str.lower() == "oficial", "venta"]
-                elif "casa" in fx_copy.columns and "venta" in fx_copy.columns:
-                    s = fx_copy.loc[fx_copy["casa"].str.lower() == "oficial", "venta"]
-                else:
-                    st.warning("⚠️ No se encontraron columnas 'Dólar'/'casa' y 'Venta'/'venta' en FX.")
-                    return np.nan
-        
-                if s.empty:
-                    st.warning("⚠️ No se encontró fila con 'oficial' en FX.")
-                    return np.nan
-        
-                val = float(pd.to_numeric(s.iloc[-1], errors="coerce"))
-                return val
-            except Exception as e:
-                st.error(f"Error al obtener el tipo de cambio oficial: {e}")
-                return np.nan
-
-        oficial_fx = get_oficial_fx(fx)
         
         dlk_objs = []
         rows_tbl = []
@@ -3686,7 +3660,7 @@ def main():
                 "TIREA":  tirea if np.isfinite(tirea) else np.nan,
                 "Dur":    dur   if np.isfinite(dur)   else np.nan,
                 "MD":     md    if np.isfinite(md)    else np.nan,
-                "Pago Final": round(100.0 * float(oficial_fx), 0),
+                "Pago Final": round(100.0 * oficial, 0),
             })
         
         # # --- SIEMPRE define el DataFrame en este scope ---
