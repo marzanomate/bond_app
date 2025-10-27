@@ -1635,7 +1635,7 @@ def _one_row_from_obj(o, tipo: str) -> dict:
         "MD": round(md, 2) if np.isfinite(md) else np.nan,
         "Pago Final": _pago_final_from_obj(o),
     }
-@st.cache_data(ttl=300)
+
 def _summarize_objects_table(objs: list, tipo: str) -> pd.DataFrame:
     """Arma la tabla ordenada por vencimiento para cualquier lista de objetos."""
     rows = [_one_row_from_obj(o, tipo) for o in objs]
