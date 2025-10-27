@@ -1923,7 +1923,7 @@ def _get_ask_price(df_all: pd.DataFrame, ticker: str) -> float:
 
     return val if pd.notna(val) else np.nan
 
-@st.cache_data(show_spinner=False)
+
 def build_lecaps_metrics(rows, df_all, today=None):
     import pandas as pd, numpy as np
 
@@ -2308,8 +2308,8 @@ def build_cer_rows_metrics(rows, df_all, cer_final, today=None):
 # -------------------------------------------------------------
 # DLK Metrics
 # -------------------------------------------------------------
-@st.cache_data(ttl=300)
-def build_dlk_metrics(rows, df_all, fx_value, today=None):
+
+def build_dlk_metrics(rows, df_all, fx_value = 1430, today=None):
     # rows: (Ticker, Emision, Vencimiento, Tipo)
     df_spec = pd.DataFrame(rows, columns=["Ticker","Emision","Vencimiento","Tipo"])
     df_spec["Ticker"] = df_spec["Ticker"].astype(str).str.strip().str.upper()
