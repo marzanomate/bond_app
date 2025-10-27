@@ -1819,7 +1819,6 @@ def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer
 # =========================
 # Tabla de métricas
 # =========================
-@st.cache_data(ttl=300)
 def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame:
     rows = []
     stl = settlement
