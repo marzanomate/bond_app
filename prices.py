@@ -2842,6 +2842,20 @@ def main():
     all_bonds = ons_bonds + manual_bonds
     name_to_bond = {b.name: b for b in all_bonds}
 
+    # --- obtener tipo de cambio oficial (último valor disponible) ---
+    try:
+        if "Dólar" in fx.columns and "Venta" in fx.columns:
+            s = fx.loc[fx["Dólar"].astype(str).str.lower().eq("oficial"), "Venta"]
+        elif "casa" in fx.columns and "venta" in fx.columns:
+            s = fx.loc[fx["casa"].astype(str).str.lower().eq("oficial"), "venta"]
+        else:
+            s = pd.Series(dtype=float)
+    
+        oficial_fx = float(s.iloc[-1]) if not s.empty else np.nan
+    
+    except Exception:
+        oficial_fx = np.nan
+
     if page == "Bonos HD":
         st.title("Bonos HD")
         st.caption("Explorar métricas de Bonos HD")
