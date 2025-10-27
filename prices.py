@@ -3663,29 +3663,29 @@ def main():
                 "Pago Final": round(100.0 * float(oficial_fx), 0),
             })
         
-        # --- SIEMPRE define el DataFrame en este scope ---
-        df_dlk_table = pd.DataFrame(rows_tbl, columns=[
-            "Ticker","Tipo","Vencimiento","Días al vencimiento","Precio","TIREA","Dur","MD","Pago Final"
-        ])
+        # # --- SIEMPRE define el DataFrame en este scope ---
+        # df_dlk_table = pd.DataFrame(rows_tbl, columns=[
+        #     "Ticker","Tipo","Vencimiento","Días al vencimiento","Precio","TIREA","Dur","MD","Pago Final"
+        # ])
         
-        # Asegura dtypes numéricos
-        numeric_cols = ["Días al vencimiento","Precio","TIREA","Dur","MD","Pago Final"]
-        df_dlk_table[numeric_cols] = df_dlk_table[numeric_cols].apply(pd.to_numeric, errors="coerce")
+        # # Asegura dtypes numéricos
+        # numeric_cols = ["Días al vencimiento","Precio","TIREA","Dur","MD","Pago Final"]
+        # df_dlk_table[numeric_cols] = df_dlk_table[numeric_cols].apply(pd.to_numeric, errors="coerce")
         
-        # --- Mostrar en Streamlit (sin Styler) y con la nueva API de width ---
-        st.dataframe(
-            df_dlk_table,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Precio":              st.column_config.NumberColumn(format=",.2f"),
-                "TIREA":               st.column_config.NumberColumn(format="0.00%"),  # si es tasa en decimales
-                "Dur":                 st.column_config.NumberColumn(format=",.2f"),
-                "MD":                  st.column_config.NumberColumn(format=",.2f"),
-                "Pago Final":          st.column_config.NumberColumn(format=",.0f"),
-                "Días al vencimiento": st.column_config.NumberColumn(format=",.0f"),
-            },
-        )
+        # # --- Mostrar en Streamlit (sin Styler) y con la nueva API de width ---
+        # st.dataframe(
+        #     df_dlk_table,
+        #     width="stretch",
+        #     hide_index=True,
+        #     column_config={
+        #         "Precio":              st.column_config.NumberColumn(format=",.2f"),
+        #         "TIREA":               st.column_config.NumberColumn(format="0.00%"),  # si es tasa en decimales
+        #         "Dur":                 st.column_config.NumberColumn(format=",.2f"),
+        #         "MD":                  st.column_config.NumberColumn(format=",.2f"),
+        #         "Pago Final":          st.column_config.NumberColumn(format=",.0f"),
+        #         "Días al vencimiento": st.column_config.NumberColumn(format=",.0f"),
+        #     },
+        # )
 
         # ---------- TAMAR (rows → objetos lecaps) ----------
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
@@ -3708,7 +3708,11 @@ def main():
          # ---------- Panel de tablas ----------
         st.subheader("Métricas por instrumento")
         tab_dlk, tab_tamar, tab_cer_bonos, tab_cer_letras = st.tabs(["DLK", "TAMAR", "CER Bonos", "CER Letras"])
-    
+
+
+        with tab_dlk:
+            st.dataframe(_summarize_objects_table(dlk_objs, "DLK"), width='stretch', hide_index=True)
+            
         with tab_tamar:
             if tamar_objs:
                 df_tbl = _summarize_tamar_with_spread(tamar_objs)
