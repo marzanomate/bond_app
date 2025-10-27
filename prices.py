@@ -269,7 +269,7 @@ def _summarize_tamar_with_spread(objs):
 # Último tipo de cambio oficial (serie 5) <= hoy
 # --------------------------------------------------------
 
-@st.cache_data(ttl=60*60*12, show_spinner=False)
+
 def fetch_oficial_df(series_id: int = 5, daily_key: str = "") -> pd.DataFrame:
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
