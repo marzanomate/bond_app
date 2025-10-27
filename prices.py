@@ -3709,9 +3709,6 @@ def main():
         st.subheader("Métricas por instrumento")
         tab_dlk, tab_tamar, tab_cer_bonos, tab_cer_letras = st.tabs(["DLK", "TAMAR", "CER Bonos", "CER Letras"])
     
-        with tab_dlk:
-            st.dataframe(_summarize_objects_table(dlk_objs, "Dólar Linked"), width='stretch', hide_index=True)
-    
         with tab_tamar:
             if tamar_objs:
                 df_tbl = _summarize_tamar_with_spread(tamar_objs)
