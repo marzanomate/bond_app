@@ -383,7 +383,7 @@ def fetch_dolares() -> pd.DataFrame:
     })
     return out.dropna(how="all", subset=["Compra", "Venta"])
 
-
+oficial_fx = float(fetch_dolares().loc[lambda d: d["Dólar"].astype(str).str.lower().eq("oficial"), "Venta"].iloc[-1])
 
 # =========================
 # Clase bond_calculator_pro
@@ -1336,7 +1336,7 @@ class cer:
 # -----------------------------------------------------------------------------
 
 class dlk:
-    def __init__(self, name, start_date, end_date, fx=1430, price=100.0):
+    def __init__(self, name, start_date, end_date, fx=oficial_fx, price=100.0):
         self.name = name
         self.start_date = start_date
         self.end_date = end_date
