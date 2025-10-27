@@ -3652,10 +3652,13 @@ def main():
                 "Pago Final": round(100.0 * 1430.0, 0),
             })
         
-        df_dlk_table = pd.DataFrame(rows_tbl)
+        df = pd.DataFrame(rows_tbl)
+
+        numeric_cols = ["Días al vencimiento", "Precio", "TIREA", "Dur", "MD", "Pago Final"]
+        df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
         st.dataframe(
             df_dlk_table.style.format({
-                "Precio": "{:.0f}", "TIREA": "{:.2f}", "Dur": "{:.2f}", "MD": "{:.2f}",
+                "Precio": "{:.0f}", "TIREA": "{:.2f}", "Dur": "{:.2f}", "MD": "{:.0f}",
                 "Pago Final": "{:.0f}",
             }),
             width='stretch', hide_index=True
