@@ -3609,7 +3609,7 @@ def main():
                     pass
             return np.nan
         
-        dlk_objs = []  # por si los querés usar después
+        dlk_objs = []
         rows_tbl = []
         
         for tk, emi, vto, tipo in dlk_rows:
@@ -3620,23 +3620,21 @@ def main():
             # default: sin métricas
             tirea = dur = md = np.nan
         
-            # intentar construir el objeto; si falla, igual agregamos fila
             try:
                 obj = dlk(
                     name=tk,
                     start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
-                    end_date=vto_dt.to_pydatetime(),
+                    end_date=vto_dt.to_pydatetime() if pd.notna(vto_dt) else None,  # <- protege NaT
                     oficial=float(oficial_fx),
-                    price=price if np.isfinite(price) else np.nan,
+                    price=float(price) if np.isfinite(price) else np.nan,
                 )
                 dlk_objs.append(obj)
-                # solo si hay precio calculamos métricas
+        
                 if np.isfinite(price):
                     tirea = float(pd.to_numeric(obj.xirr(), errors="coerce"))
                     dur   = float(pd.to_numeric(obj.duration(), errors="coerce"))
                     md    = float(pd.to_numeric(obj.modified_duration(), errors="coerce"))
-            except Exception as e:
-                # seguimos; mostramos la fila igualmente
+            except Exception:
                 pass
         
             rows_tbl.append({
@@ -3644,24 +3642,35 @@ def main():
                 "Tipo": tipo,
                 "Vencimiento": vto_dt.strftime("%d/%m/%Y") if pd.notna(vto_dt) else "",
                 "Días al vencimiento": dias,
-                "Precio": price if np.isfinite(price) else None,
-                "TIREA": tirea if np.isfinite(tirea) else None,
-                "Dur":   dur   if np.isfinite(dur)   else None,
-                "MD":    md    if np.isfinite(md)    else None,
-                # Pago Final DLK ~ 100 * Oficial (mostrarlo siempre)
-                "Pago Final": round(100.0 * 1430.0, 0),
+                "Precio": float(price) if np.isfinite(price) else np.nan,
+                "TIREA":  tirea if np.isfinite(tirea) else np.nan,
+                "Dur":    dur   if np.isfinite(dur)   else np.nan,
+                "MD":     md    if np.isfinite(md)    else np.nan,
+                "Pago Final": round(100.0 * float(oficial_fx), 0),
             })
         
-        df = pd.DataFrame(rows_tbl)
-
-        numeric_cols = ["Días al vencimiento", "Precio", "TIREA", "Dur", "MD", "Pago Final"]
-        df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
+        # --- SIEMPRE define el DataFrame en este scope ---
+        df_dlk_table = pd.DataFrame(rows_tbl, columns=[
+            "Ticker","Tipo","Vencimiento","Días al vencimiento","Precio","TIREA","Dur","MD","Pago Final"
+        ])
+        
+        # Asegura dtypes numéricos
+        numeric_cols = ["Días al vencimiento","Precio","TIREA","Dur","MD","Pago Final"]
+        df_dlk_table[numeric_cols] = df_dlk_table[numeric_cols].apply(pd.to_numeric, errors="coerce")
+        
+        # --- Mostrar en Streamlit (sin Styler) y con la nueva API de width ---
         st.dataframe(
-            df_dlk_table.style.format({
-                "Precio": "{:.0f}", "TIREA": "{:.2f}", "Dur": "{:.2f}", "MD": "{:.0f}",
-                "Pago Final": "{:.0f}",
-            }),
-            width='stretch', hide_index=True
+            df_dlk_table,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Precio":              st.column_config.NumberColumn(format=",.2f"),
+                "TIREA":               st.column_config.NumberColumn(format="0.00%"),  # si es tasa en decimales
+                "Dur":                 st.column_config.NumberColumn(format=",.2f"),
+                "MD":                  st.column_config.NumberColumn(format=",.2f"),
+                "Pago Final":          st.column_config.NumberColumn(format=",.0f"),
+                "Días al vencimiento": st.column_config.NumberColumn(format=",.0f"),
+            },
         )
 
         # ---------- TAMAR (rows → objetos lecaps) ----------
