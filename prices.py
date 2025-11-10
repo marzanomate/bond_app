@@ -2081,7 +2081,7 @@ def _tna30_tem_from_irr_ea(irr_pct: float):
 # ----------------------------------------------------------------------------
 #  Agrego TO26/BONTE
 # ----------------------------------------------------------------------------
-@st.cache_data(ttl=300)
+@st.cache_resource(show_spinner=False)
 def build_extra_ars_bonds_for_lecaps(df_all_norm):
     """
     Crea TY30P y TO26 usando bond_calculator_pro y devuelve:
