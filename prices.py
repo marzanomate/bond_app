@@ -2741,7 +2741,7 @@ def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: l
 
 LECAPS_ROWS = [
     # ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
-    ("S10N5", "10/11/2025","31/01/2025", 2.2, "Fija"),
+    # ("S10N5", "10/11/2025","31/01/2025", 2.2, "Fija"),
     ("S28N5","28/11/2025","14/2/2025",2.26, "Fija"),
     ("T15D5","15/12/2025","14/10/2024",3.89, "Fija"),
     ("S16E6","16/01/2026","18/08/2025",3.6, "Fija"),
@@ -3699,7 +3699,7 @@ def main():
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
             tamar_rows = [
-                ("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
+                # ("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
                 ("M16E6","16/1/2026","18/08/2025",tamar_tem_m16e6, "TAMAR"),
                 ("M27F6","27/2/2026","10/11/2025",tamar_tem_m27f6, "TAMAR"),
                 ("M31G6","31/8/2026","29/08/2025",tamar_tem_m31g6, "TAMAR"),
