@@ -3524,12 +3524,6 @@ def main():
             except Exception:
                 return np.nan
     
-        tx25 = cer_bonos(
-            name="TX25", cer_final=cer_final, cer_inicial=46.20846297,
-            start_date=datetime(2022, 11, 9), end_date=datetime(2025, 11, 9),
-            payment_frequency=6, amortization_dates=["2025-11-09"], amortizations=[100],
-            rate=1.8, price=_px_bid("TX25"), fr=2,
-        )
         tx26 = cer_bonos(
             name="TX26", cer_final=cer_final, cer_inicial=22.5439510895903,
             start_date=datetime(2020, 11, 9), end_date=datetime(2026, 11, 9),
@@ -3572,7 +3566,7 @@ def main():
             ],
             amortizations=[5]*20, rate=3.31, price=_px_bid("CUAP"), fr=2,
         )
-        cer_bonos_objs = [tx25, tx26, tx28, dicp, cuap]
+        cer_bonos_objs = [tx26, tx28, dicp, cuap]
     
         # ---------- CER Letras (rows → objetos) ----------
         cer_rows = [
