@@ -228,6 +228,14 @@ def _tamar_ref_tna30_pct(ticker: str) -> float:
     tem_ref = base.get(ticker, tamar_tem)        # default: TAMAR base
     return round(tem_ref * 12.0 * 100.0, 2)      # % TNA30
 
+# --- helpers para armar DF y graficar ---
+def _fmt_date(d):
+    if d is None:
+        return ""
+    try:
+        return pd.to_datetime(d).strftime("%d/%m/%Y")
+    except Exception:
+        return str(d)    
 
 def _summarize_tamar_with_spread(objs):
     rows = []
@@ -3799,14 +3807,7 @@ def main():
         # =========================
         st.subheader("Curvas")
         
-        # --- helpers para armar DF y graficar ---
-        def _fmt_date(d):
-            if d is None:
-                return ""
-            try:
-                return pd.to_datetime(d).strftime("%d/%m/%Y")
-            except Exception:
-                return str(d)
+
         
         def _df_for_plot(objs, tipo_label):
             rows = []
