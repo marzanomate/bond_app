@@ -1515,14 +1515,6 @@ def _parse_dt_dmy(s):
     except Exception:
         return None
 
-def _fmt_date(dt_like) -> str:
-    """Devuelve 'dd/mm/aaaa' o '' si no se puede formatear."""
-    try:
-        d = _parse_dt_dmy(dt_like)
-        return d.strftime("%d/%m/%Y") if d else ""
-    except Exception:
-        return ""
-
 def _end_date_from_obj(o):
     """Intenta obtener la fecha de vencimiento del objeto."""
     # 1) atributo end_date
