@@ -179,12 +179,14 @@ else:
     ago18  = pd.Timestamp(year=today.year, month=8, day=18)  # M10N5 / M16E6
     ago29  = pd.Timestamp(year=today.year, month=8, day=29)  # M27F6
     nov10  = pd.Timestamp(year=today.year, month=11, day=10)
+    nov28  = pd.Timestamp(year=today.year, month=11, day=28)
 
     start        = rows_before_label(idx, jan29,  9)
     start_m10n5  = rows_before_label(idx, ago18,  9)
     start_m16e6  = rows_before_label(idx, ago18,  9)
     start_m27f6  = rows_before_label(idx, ago29,  9)
     start_m31g6  = rows_before_label(idx, nov10, 9)
+    start_m30a6  = rows_before_label(idx, nov28, 9)
     end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
 
     s = "tamar_na_dec"
@@ -193,12 +195,14 @@ else:
     tamar_window_m16e6   = df_tamar.loc[start_m16e6:end, s]
     tamar_window_m27f6   = df_tamar.loc[start_m27f6:end, s]
     tamar_window_m31g6   = df_tamar.loc[start_m31g6:end, s]
+    tamar_window_m30a6   = df_tamar.loc[start_m30a6:end, s]
 
     tamar_avg_na       = float(tamar_window.mean())
     tamar_avg_na_m10n5 = float(tamar_window_m10n5.mean()) + 0.06   # +6pp -> +0.06 en decimal
     tamar_avg_na_m16e6 = float(tamar_window_m16e6.mean()) + 0.075  # +7.5pp
     tamar_avg_na_m27f6 = float(tamar_window_m27f6.mean()) + 0.015  # +1.5pp
     tamar_avg_na_m31g6 = float(tamar_window_m31g6.mean()) + 0.05
+    tamar_avg_na_m30a6 = float(tamar_window_m30a6.mean()) + 0.04
 
     # (1 + r_na * 32/365) ^ (365/32) -> EA ; luego ^(1/12) - 1 -> TEM
     def na_avg_to_tem(avg_na_dec: float) -> float:
@@ -209,6 +213,7 @@ else:
     tamar_tem_m16e6 = na_avg_to_tem(tamar_avg_na_m16e6)
     tamar_tem_m27f6 = na_avg_to_tem(tamar_avg_na_m27f6)
     tamar_tem_m31g6 = na_avg_to_tem(tamar_avg_na_m31g6)
+    tamar_tem_m30a6 = na_avg_to_tem(tamar_avg_na_m30a6)
 
     # último valor observado (<= hoy)
     tamar_hoy = float(df_tamar.loc[df_tamar.index <= today, "tamar_na_pct"].iloc[-1])
@@ -224,6 +229,7 @@ def _tamar_ref_tna30_pct(ticker: str) -> float:
         "M16E6": tamar_tem_m16e6,
         "M27F6": tamar_tem_m27f6,
         "M31G6": tamar_tem_m31g6,
+        "M30A6": tamar_tem_m30a6,
     }
     tem_ref = base.get(ticker, tamar_tem)        # default: TAMAR base
     return round(tem_ref * 12.0 * 100.0, 2)      # % TNA30
@@ -3573,10 +3579,12 @@ def main():
             #("TZXO5", "31/10/2025", "31/10/2024", 480.2, "CER"),
             # ("TZXD5", "15/12/2025", "15/3/2024", 271.0, "CER"),
             ("TZXM6", "31/3/2026",  "30/4/2024", 337.0, "CER"),
+            ("X29Y6", "29/5/2026" , "28/11/2025", 651.8981,"CER"),
             ("TZX26", "30/6/2026",  "1/2/2024",  200.4, "CER"),
             ("TZXO6", "30/10/2026", "31/10/2024",480.2, "CER"),
             ("TZXD6", "15/12/2026", "15/3/2024", 271.0, "CER"),
             ("TZXM7", "31/3/2027",  "20/5/2024", 361.3, "CER"),
+            ("TZXA7", "30/4/2027" , "28/11/2025", 651.8981,"CER"),
             ("TZX27", "30/6/2027",  "1/2/2024",  200.4, "CER"),
             ("TZXD7", "15/12/2027", "15/3/2024", 271.0, "CER"),
             ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER")
@@ -3696,6 +3704,7 @@ def main():
                 # ("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
                 ("M16E6","16/1/2026","18/08/2025",tamar_tem_m16e6, "TAMAR"),
                 ("M27F6","27/2/2026","10/11/2025",tamar_tem_m27f6, "TAMAR"),
+                ("M30A6","30/4/2026" ,"28/11/2025",tamar_tem_m30a6,"TAMAR"),
                 ("M31G6","31/8/2026","29/08/2025",tamar_tem_m31g6, "TAMAR"),
                 ("TTM26","16/3/2026","29/1/2025", tamar_tem,        "TAMAR"),
                 ("TTJ26","30/6/2026","29/1/2025", tamar_tem,        "TAMAR"),
