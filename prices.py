@@ -2646,7 +2646,7 @@ def manual_bonds_factory(df_all):
     # BC7DD
     # =========================
     bc7dd = bond_calculator_pro(
-        name="BC7DD", emisor="Provincia Buenos Aires", curr="MEP", law="NY",
+        name="BC7DD", emisor="Provincia Buenos Aires", curr="CCL", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
@@ -2671,9 +2671,135 @@ def manual_bonds_factory(df_all):
         outstanding=12000, calificacion="CCC-"
     )
 
+    pm29d = bond_calculator_pro(
+    name="PM29D",
+    emisor="Mendoza",       # poné acá el emisor real
+    curr="CCL",                        # asumiendo USD
+    law="NY",                          # asumiendo ley extranjera; cambia si no
+    start_date=datetime(2020, 5, 19),
+    end_date=datetime(2029, 3, 19),
+    payment_frequency=6,
+    amortization_dates=[
+        "2023-03-19",
+        "2023-09-19",
+        "2024-03-19",
+        "2024-09-19",
+        "2025-03-19",
+        "2025-09-19",
+        "2026-03-19",
+        "2026-09-19",
+        "2027-03-19",
+        "2027-09-19",
+        "2028-03-19",
+        "2028-09-19",
+        "2029-03-19",
+    ],
+    amortizations=[
+        100.0 / 13, 100.0 / 13, 100.0 / 13,
+        100.0 / 13, 100.0 / 13, 100.0 / 13,
+        100.0 / 13, 100.0 / 13, 100.0 / 13,
+        100.0 / 13, 100.0 / 13, 100.0 / 13,
+        100.0 / 13,
+    ],  # ≈ 7.6923077% cada una, suma 100
+
+    # Tasa base (la va a pisar el schedule de step-up; ponemos la primera)
+    rate=0.0275,
+
+    # Usando el ISIN para buscar el precio (ajustá si tu DataFrame usa "symbol")
+    price=prices.loc[prices["symbol"] == "PMM29", "px_ask"].iloc[0] / ccl,
+
+    # Schedule de cupones step-up según el prospecto
+    step_up_dates=[
+        "2020-05-19",  # 2.75% hasta 2021-09-19 (excl.)
+        "2021-09-19",  # 4.25% hasta 2023-03-19 (excl.)
+        "2023-03-19",  # 5.75% hasta el vencimiento
+    ],
+    step_up=[
+        0.0275,
+        0.0425,
+        0.0575,
+    ],
+    outstanding=590,           
+    calificacion="CCC-",         
+)
+
+
+sfd34 = bond_calculator_pro(
+    name="SFD34",
+    emisor="Santa Fe",       # poné acá el emisor real
+    curr="CCL",                        # asumiendo USD
+    law="NY",                          # asumiendo ley extranjera; cambia si no
+    start_date=datetime(2025, 12, 11),
+    end_date=datetime(2034, 12, 11),
+    payment_frequency=6,
+    amortization_dates=[
+        "2031-12-11",
+        "2032-12-11",
+        "2033-12-11",
+        "2034-12-11"
+    ],
+    amortizations=[
+        25,25,25,25
+    ],  
+
+    # Tasa base (la va a pisar el schedule de step-up; ponemos la primera)
+    rate=8.1,
+
+    # Usando el ISIN para buscar el precio (ajustá si tu DataFrame usa "symbol")
+    price=prices.loc[prices["symbol"] == "SFD34", "px_ask"].iloc[0] / ccl,
+
+    # Schedule de cupones step-up según el prospecto
+    step_up_dates=[],
+    step_up=[],
+    outstanding=800,           
+    calificacion="CCC-",         
+)
+
+bdc33 = bond_calculator_pro(
+            name = "BDC33",
+            emisor = "CABA",
+            curr = "CCL",
+            law = "INT",
+            start_date = datetime(2025, 11, 26),
+            end_date = datetime(2033, 11, 26),
+            payment_frequency = 6,
+            amortization_dates = ["2031-11-26",
+                                  "2032-11-26",
+                                "2033-11-26"],
+            amortizations = [33, 33, 34],
+            rate = 7.8,
+            price = prices.loc[prices["symbol"] == "BDC33", "px_ask"].iloc[0] / ccl,
+            step_up_dates = [],
+            step_up = [],
+            outstanding = 600, 
+            calificacion = "CCC-")
+
+########################################################################################
+################################# Cór #################################################
+########################################################################################
+
+co32d = bond_calculator_pro(
+            name = "CO32D",
+            emisor = "Córdoba",
+            curr = "CCL",
+            law = "NY",
+            start_date = datetime(2025, 7, 2),
+            end_date = datetime(2032, 7, 2),
+            payment_frequency = 6,
+            amortization_dates = ["2030-07-02",
+                                  "2031-07-02",
+                                "2032-07-02"],
+            amortizations = [33, 33, 34],
+            rate = 9.75,
+            price = prices.loc[prices["symbol"] == "CO32", "px_ask"].iloc[0] / ccl,
+            step_up_dates = [],
+            step_up = [],
+            outstanding = 725, 
+            calificacion = "CCC-")
+
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
-            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd, bpy6d]
+            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd, bpy6d, pm29d, sfd34, bdc33, co32d]
 
 
 # =========================
@@ -2749,18 +2875,21 @@ LECAPS_ROWS = [
     # ("S31O5","31/10/2025","16/12/2024",2.74, "Fija"),
     # ("S10N5", "10/11/2025","31/01/2025", 2.2, "Fija"),
     # ("S28N5","28/11/2025","14/2/2025",2.26, "Fija"),
-    ("T15D5","15/12/2025","14/10/2024",3.89, "Fija"),
-    ("S16E6","16/01/2026","18/08/2025",3.6, "Fija"),
+    # ("T15D5","15/12/2025","14/10/2024",3.89, "Fija"),
+    # ("S16E6","16/01/2026","18/08/2025",3.6, "Fija"),
     ("T30E6","30/1/2026","16/12/2024",2.65, "Fija"),
     ("T13F6","13/2/2026","29/11/2024",2.60, "Fija"),
     ("S27F6","27/2/2026","29/8/2025",3.95, "Fija"),
+    ("S17A6","17/4/2026" ,"15/12/2025" ,2.4, "Fija"),
     ("S30A6","30/4/2026","29/9/2025",3.53, "Fija"),
     ("S29Y6","29/5/2026","30/5/2025",2.35, "Fija"),
     ("T30J6","30/6/2026","17/1/2025",2.15, "Fija"),
     ("S31G6","31/8/2026","10/11/2025", 2.5, "Fija"),
     ("S30O6","30/10/2026","31/10/2025", 2.55, "Fija"),
     ("T15E7","15/1/2027","31/1/2025",2.05, "Fija"),
+    ("T31Y7","31/5/2027" ,"15/12/2025" , 2.4, "Fija"),
     ("T30A7","30/4/2027" ,"31/10/2025" , 2.55, "Fija"),
+    ("T30J7","30/07/2027","16/01/2026" , 2.58 ,"Fija"),
     ("TTM26","16/3/2026","29/1/2025", 2.225, "Fija"),
     ("TTJ26","30/6/2026","29/1/2025", 2.19, "Fija"),
     ("TTS26","15/9/2026","29/01/2025", 2.17, "Fija"),
@@ -3582,9 +3711,11 @@ def main():
             ("X29Y6", "29/5/2026" , "28/11/2025", 651.8981,"CER"),
             ("TZX26", "30/6/2026",  "1/2/2024",  200.4, "CER"),
             ("TZXO6", "30/10/2026", "31/10/2024",480.2, "CER"),
+            ("X30N6", "30/11/2026", "15/12/2025", 659.6789,"CER"),
             ("TZXD6", "15/12/2026", "15/3/2024", 271.0, "CER"),
             ("TZXM7", "31/3/2027",  "20/5/2024", 361.3, "CER"),
             ("TZXA7", "30/4/2027" , "28/11/2025", 651.8981,"CER"),
+            ("TZXY7", "31/5/2027" , "15/12/2025", 659.6789,"CER"),
             ("TZX27", "30/6/2027",  "1/2/2024",  200.4, "CER"),
             ("TZXD7", "15/12/2027", "15/3/2024", 271.0, "CER"),
             ("TZX28", "30/6/2028",  "1/2/2024",  200.4, "CER")
@@ -3617,8 +3748,10 @@ def main():
         dlk_rows = [
             # ("D31O5", "10/07/2025", "31/10/2025", "Dólar Linked"),
             # ("D28N5", "30/09/2025", "28/11/2025", "Dólar Linked"),
-            ("TZVD5", "01/07/2024", "15/12/2025", "Dólar Linked"),
-            ("D16E6", "28/04/2025", "16/01/2026", "Dólar Linked"),
+            # ("TZVD5", "01/07/2024", "15/12/2025", "Dólar Linked"),
+            # ("D16E6", "28/04/2025", "16/01/2026", "Dólar Linked"),
+             ("D30E6", "17/10/2025", "30/01/2026", "Dolar Linked"),
+            ("D27F6", "16/01/2026", "27/02/2026", "Dolar Linked"),
             ("D30A6", "30/09/2025", "30/04/2026", "Dólar Linked"),
             ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
         ]
