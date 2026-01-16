@@ -2706,7 +2706,7 @@ def manual_bonds_factory(df_all):
     rate=0.0275,
 
     # Usando el ISIN para buscar el precio (ajustá si tu DataFrame usa "symbol")
-    price=prices.loc[prices["symbol"] == "PM29D", "px_ask"].iloc[0] ,
+    price=px("PM29D"),
 
     # Schedule de cupones step-up según el prospecto
     step_up_dates=[
@@ -2746,8 +2746,7 @@ def manual_bonds_factory(df_all):
         rate=8.1,
     
         # Usando el ISIN para buscar el precio (ajustá si tu DataFrame usa "symbol")
-        price=prices.loc[prices["symbol"] == "SFD4D", "px_ask"].iloc[0],
-    
+        price=px("SFD4D"),
         # Schedule de cupones step-up según el prospecto
         step_up_dates=[],
         step_up=[],
@@ -2768,7 +2767,7 @@ def manual_bonds_factory(df_all):
                                     "2033-11-26"],
                 amortizations = [33, 33, 34],
                 rate = 7.8,
-                price = prices.loc[prices["symbol"] == "BD33D", "px_ask"].iloc[0],
+                price = px("BDC3D"),
                 step_up_dates = [],
                 step_up = [],
                 outstanding = 600, 
@@ -2791,7 +2790,7 @@ def manual_bonds_factory(df_all):
                                     "2032-07-02"],
                 amortizations = [33, 33, 34],
                 rate = 9.75,
-                price = prices.loc[prices["symbol"] == "CO32D", "px_ask"].iloc[0] ,
+                price = px("CO32D") ,
                 step_up_dates = [],
                 step_up = [],
                 outstanding = 725, 
