@@ -2721,81 +2721,81 @@ def manual_bonds_factory(df_all):
     ],
     outstanding=590,           
     calificacion="CCC-",         
-)
+    )
 
 
-sfd34 = bond_calculator_pro(
-    name="SFD34",
-    emisor="Santa Fe",       # poné acá el emisor real
-    curr="CCL",                        # asumiendo USD
-    law="NY",                          # asumiendo ley extranjera; cambia si no
-    start_date=datetime(2025, 12, 11),
-    end_date=datetime(2034, 12, 11),
-    payment_frequency=6,
-    amortization_dates=[
-        "2031-12-11",
-        "2032-12-11",
-        "2033-12-11",
-        "2034-12-11"
-    ],
-    amortizations=[
-        25,25,25,25
-    ],  
-
-    # Tasa base (la va a pisar el schedule de step-up; ponemos la primera)
-    rate=8.1,
-
-    # Usando el ISIN para buscar el precio (ajustá si tu DataFrame usa "symbol")
-    price=prices.loc[prices["symbol"] == "SFD34", "px_ask"].iloc[0] / ccl,
-
-    # Schedule de cupones step-up según el prospecto
-    step_up_dates=[],
-    step_up=[],
-    outstanding=800,           
-    calificacion="CCC-",         
-)
-
-bdc33 = bond_calculator_pro(
-            name = "BDC33",
-            emisor = "CABA",
-            curr = "CCL",
-            law = "INT",
-            start_date = datetime(2025, 11, 26),
-            end_date = datetime(2033, 11, 26),
-            payment_frequency = 6,
-            amortization_dates = ["2031-11-26",
-                                  "2032-11-26",
-                                "2033-11-26"],
-            amortizations = [33, 33, 34],
-            rate = 7.8,
-            price = prices.loc[prices["symbol"] == "BDC33", "px_ask"].iloc[0] / ccl,
-            step_up_dates = [],
-            step_up = [],
-            outstanding = 600, 
-            calificacion = "CCC-")
-
-########################################################################################
-################################# Cór #################################################
-########################################################################################
-
-co32d = bond_calculator_pro(
-            name = "CO32D",
-            emisor = "Córdoba",
-            curr = "CCL",
-            law = "NY",
-            start_date = datetime(2025, 7, 2),
-            end_date = datetime(2032, 7, 2),
-            payment_frequency = 6,
-            amortization_dates = ["2030-07-02",
-                                  "2031-07-02",
-                                "2032-07-02"],
-            amortizations = [33, 33, 34],
-            rate = 9.75,
-            price = prices.loc[prices["symbol"] == "CO32", "px_ask"].iloc[0] / ccl,
-            step_up_dates = [],
-            step_up = [],
-            outstanding = 725, 
-            calificacion = "CCC-")
+    sfd34 = bond_calculator_pro(
+        name="SFD34",
+        emisor="Santa Fe",       # poné acá el emisor real
+        curr="CCL",                        # asumiendo USD
+        law="NY",                          # asumiendo ley extranjera; cambia si no
+        start_date=datetime(2025, 12, 11),
+        end_date=datetime(2034, 12, 11),
+        payment_frequency=6,
+        amortization_dates=[
+            "2031-12-11",
+            "2032-12-11",
+            "2033-12-11",
+            "2034-12-11"
+        ],
+        amortizations=[
+            25,25,25,25
+        ],  
+    
+        # Tasa base (la va a pisar el schedule de step-up; ponemos la primera)
+        rate=8.1,
+    
+        # Usando el ISIN para buscar el precio (ajustá si tu DataFrame usa "symbol")
+        price=prices.loc[prices["symbol"] == "SFD34", "px_ask"].iloc[0] / ccl,
+    
+        # Schedule de cupones step-up según el prospecto
+        step_up_dates=[],
+        step_up=[],
+        outstanding=800,           
+        calificacion="CCC-",         
+    )
+    
+    bdc33 = bond_calculator_pro(
+                name = "BDC33",
+                emisor = "CABA",
+                curr = "CCL",
+                law = "INT",
+                start_date = datetime(2025, 11, 26),
+                end_date = datetime(2033, 11, 26),
+                payment_frequency = 6,
+                amortization_dates = ["2031-11-26",
+                                      "2032-11-26",
+                                    "2033-11-26"],
+                amortizations = [33, 33, 34],
+                rate = 7.8,
+                price = prices.loc[prices["symbol"] == "BDC33", "px_ask"].iloc[0] / ccl,
+                step_up_dates = [],
+                step_up = [],
+                outstanding = 600, 
+                calificacion = "CCC-")
+    
+    ########################################################################################
+    ################################# Cór #################################################
+    ########################################################################################
+    
+    co32d = bond_calculator_pro(
+                name = "CO32D",
+                emisor = "Córdoba",
+                curr = "CCL",
+                law = "NY",
+                start_date = datetime(2025, 7, 2),
+                end_date = datetime(2032, 7, 2),
+                payment_frequency = 6,
+                amortization_dates = ["2030-07-02",
+                                      "2031-07-02",
+                                    "2032-07-02"],
+                amortizations = [33, 33, 34],
+                rate = 9.75,
+                price = prices.loc[prices["symbol"] == "CO32", "px_ask"].iloc[0] / ccl,
+                step_up_dates = [],
+                step_up = [],
+                outstanding = 725, 
+                calificacion = "CCC-")
 
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
