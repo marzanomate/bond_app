@@ -583,28 +583,72 @@ class bond_calculator_pro:
             out.append(r)
         self._cache[key] = out
         return out
+        
+    # def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
+    #     """
+    #     Cupón en t_i = (tasa del período (t_{i-1}, t_i]) * (saldo al inicio del período) / frecuencia.
+    #     - Saldo al inicio del período = outstanding_on(t_{i-1})  (ya neto de amort en t_{i-1})
+    #     - Tasa del período: usamos la que aplica a t_i (o equivalentemente a (t_{i-1}, t_i]).
+    #     """
+    #     key = ("coupons", (settlement or 0))
+    #     if key in self._cache:
+    #         return self._cache[key]
+
+    #     dates_dt = [self._as_dt(s) for s in self.generate_payment_dates(settlement)]
+    #     rates = self.step_up_rate(settlement)
+    #     f = self.frequency
+
+    #     cpns = [0.0]  # en t0 no hay cupón
+    #     for i in range(1, len(dates_dt)):
+    #         period_start = dates_dt[i-1]  # t_{i-1} (settlement o cupón previo)
+    #         rate_interval = float(rates[i])  # tasa correspondiente al período que finaliza en t_i
+    #         base = self.outstanding_on(period_start)
+    #         cpns.append((rate_interval / f) * base)
+
+    #     self._cache[key] = cpns
+    #     return cpns
 
     def coupon_payments(self, settlement: Optional[datetime] = None) -> List[float]:
         """
-        Cupón en t_i = (tasa del período (t_{i-1}, t_i]) * (saldo al inicio del período) / frecuencia.
-        - Saldo al inicio del período = outstanding_on(t_{i-1})  (ya neto de amort en t_{i-1})
-        - Tasa del período: usamos la que aplica a t_i (o equivalentemente a (t_{i-1}, t_i]).
+        Cupón en t_i = rate_i * yearfrac_30_360(inicio, fin) * residual_en_ti
+    
+        - inicio: max(fecha_emision, fecha_cupon_anterior_teorica)
+        - fin: fecha de pago t_i
+        - residual_en_ti: outstanding_on(t_i)  (post amort en esa fecha)
         """
         key = ("coupons", (settlement or 0))
         if key in self._cache:
             return self._cache[key]
-
+    
         dates_dt = [self._as_dt(s) for s in self.generate_payment_dates(settlement)]
-        rates = self.step_up_rate(settlement)
-        f = self.frequency
-
+        rates = self.step_up_rate(settlement)  # tasa aplicable a t_i
+        pf = self.payment_frequency
+    
+        # --- DAYS360 estilo Excel (mes=30, año=360) ---
+        def days360(d1: datetime, d2: datetime) -> int:
+            d1_day = min(d1.day, 30)
+            d2_day = min(d2.day, 30)
+            return (d2.year - d1.year) * 360 + (d2.month - d1.month) * 30 + (d2_day - d1_day)
+    
         cpns = [0.0]  # en t0 no hay cupón
+    
         for i in range(1, len(dates_dt)):
-            period_start = dates_dt[i-1]  # t_{i-1} (settlement o cupón previo)
-            rate_interval = float(rates[i])  # tasa correspondiente al período que finaliza en t_i
-            base = self.outstanding_on(period_start)
-            cpns.append((rate_interval / f) * base)
-
+            pay = dates_dt[i]
+            rate_i = float(rates[i])
+    
+            # fecha cupón anterior "teórica" por calendario
+            prev_theoretical = pay - relativedelta(months=pf)
+    
+            # inicio de devengamiento: no puede ser antes de emisión
+            accrual_start = max(prev_theoretical, self.start_date)
+    
+            frac = days360(accrual_start, pay) / 360.0
+    
+            # ✅ base residual AL MOMENTO DEL PAGO (post amort en pay)
+            base = self.outstanding_on(pay - timedelta(days=1))
+    
+            cpns.append(rate_i * frac * base)
+    
         self._cache[key] = cpns
         return cpns
 
@@ -2795,10 +2839,32 @@ def manual_bonds_factory(df_all):
                 step_up = [],
                 outstanding = 725, 
                 calificacion = "CCC-")
+    
+    an_29 = bond_calculator_pro(
+            name="AN29",
+            emisor = "Tesoro Nacional",
+            curr = "MEP",
+            law = "ARG",
+            start_date=datetime(2025, 12, 12), 
+            end_date=datetime(2029, 11, 30),
+            payment_frequency=6,  
+            amortization_dates=[
+                "2029-11-30"
+            ],  
+            amortizations = [
+                100
+            ],  
+            step_up_dates = [],
+            step_up = [],
+            rate=0.065, 
+            price=px("AN29D"),  
+            outstanding=1000, 
+            calificacion = "CCC-")
+
 
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
-            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd, bpy6d, pm29d, sfd34, bdc33, co32d]
+            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd, bpy6d, pm29d, sfd34, bdc33, co32d, an_29]
 
 
 # =========================
