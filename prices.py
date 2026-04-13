@@ -1780,6 +1780,8 @@ def load_market_data():
     df_corps = to_df(fetch_json(url_corps)); df_corps["source"] = "corps"
     df_mep   = to_df(fetch_json(url_mep));   df_mep["source"]   = "mep"
 
+    mep      = df_mep.loc[df_mep["ticker"] == "AL30", "ask"].iloc[0]
+
     df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
     return df_all, df_mep
 @st.cache_data(ttl=300)
@@ -1855,7 +1857,7 @@ def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer
 
         rate_pct = normalize_rate_to_percent(parse_float_cell(r["rate"]))
         try:
-            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer) * adj
+            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer) * adj / mep
         except Exception:
             price    = np.nan
         outstanding = parse_float_cell(r["outstanding"])
