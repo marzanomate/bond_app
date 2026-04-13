@@ -1791,10 +1791,10 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
         alt = "px_ask" if prefer == "px_bid" else "px_bid"
         if alt in row and pd.notna(row[alt]): return float(row[alt])
         raise KeyError("no valid bid/ask")
-    row = df_all.loc[df_all["symbol"] == name] / mep
+    row = df_all.loc[df_all["symbol"] == name]
     if not row.empty:
         return _pick(row.iloc[0])
-    row = df_all.loc[df_all["symbol"] == f"{name}D"] / mep
+    row = df_all.loc[df_all["symbol"] == f"{name}D"]
     if not row.empty:
         return _pick(row.iloc[0])
     raise KeyError(f"Price not found for {name} (or {name}D)")
