@@ -1791,10 +1791,10 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
         alt = "px_ask" if prefer == "px_bid" else "px_bid"
         if alt in row and pd.notna(row[alt]): return float(row[alt])
         raise KeyError("no valid bid/ask")
-    row = df_all.loc[df_all["symbol"] == name]
+    row = df_all.loc[df_all["symbol"] == name] / mep
     if not row.empty:
         return _pick(row.iloc[0])
-    row = df_all.loc[df_all["symbol"] == f"{name}D"]
+    row = df_all.loc[df_all["symbol"] == f"{name}D"] / mep
     if not row.empty:
         return _pick(row.iloc[0])
     raise KeyError(f"Price not found for {name} (or {name}D)")
@@ -1857,7 +1857,7 @@ def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer
 
         rate_pct = normalize_rate_to_percent(parse_float_cell(r["rate"]))
         try:
-            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer) * adj / mep
+            price    = get_price_for_symbol(df_all, name, prefer=price_col_prefer) * adj
         except Exception:
             price    = np.nan
         outstanding = parse_float_cell(r["outstanding"])
