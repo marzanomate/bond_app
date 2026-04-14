@@ -3799,7 +3799,7 @@ def main():
         df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
         st.subheader("Métricas de LECAPs/BONCAPs")
-        lecaps_cols = ["Ticker", "Vencimiento", "Precio", "Rendimiento (TIR EA)", "Retorno Directo", "Var. Dia (%)"]
+        lecaps_cols = ["Ticker", "Vencimiento", "Precio", "Rendimiento (TIR EA)", "Modified Duration", "Retorno Directo", "Var. Dia (%)"]
         df_lecaps_display = df_lecaps[[c for c in lecaps_cols if c in df_lecaps.columns]].copy()
 
         def _color_var_lec(val):
@@ -3809,6 +3809,7 @@ def main():
         styled_lec = df_lecaps_display.style.format({
             "Precio":               "{:.2f}",
             "Rendimiento (TIR EA)": "{:.2f}%",
+            "Modified Duration":    "{:.2f}",
             "Retorno Directo":      "{:.2f}%",
             "Var. Dia (%)":         lambda v: f"{v:+.2f}%" if pd.notna(v) else "—",
         }, na_rep="—")
@@ -4256,21 +4257,49 @@ def main():
         tab_dlk, tab_tamar, tab_cer_bonos, tab_cer_letras = st.tabs(["DLK", "TAMAR", "CER Bonos", "CER Letras"])
 
 
+        def _display_metrics(df_raw, tipo_label):
+            """Filtra a las 4 columnas solicitadas y agrega variación del día."""
+            df = df_raw.copy()
+            # Renombrar TIREA -> TIR si viene así
+            df = df.rename(columns={"TIREA": "TIR (%)", "Rendimiento (TIR EA)": "TIR (%)"})
+            # Variación del día (pct_change del feed)
+            def _get_var(ticker):
+                r = _lookup_row(df_all_norm, ticker)
+                if r is None: return np.nan
+                for col in ("pct_change","change_pct","var_pct","variacion","change","d_pct"):
+                    if col in r.index and pd.notna(r[col]): return float(r[col])
+                return np.nan
+            df["Var. Día (%)"] = df["Ticker"].apply(_get_var)
+            # Solo columnas requeridas
+            keep = ["Ticker", "Vencimiento", "Precio", "TIR (%)", "MD", "Var. Día (%)"]
+            df = df[[c for c in keep if c in df.columns]]
+            # Estilo
+            def _color(v):
+                if pd.isna(v): return ""
+                return "color:#16a34a;font-weight:600" if v > 0 else ("color:#dc2626;font-weight:600" if v < 0 else "")
+            fmt = {"Precio": "{:.2f}", "TIR (%)": "{:.2f}%", "MD": "{:.2f}",
+                   "Var. Día (%)": lambda v: f"{v:+.2f}%" if pd.notna(v) else "—"}
+            styled = df.style.format(fmt, na_rep="—")
+            try:
+                styled = styled.map(_color, subset=["Var. Día (%)"])
+            except AttributeError:
+                styled = styled.applymap(_color, subset=["Var. Día (%)"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
         with tab_dlk:
-            st.dataframe(_summarize_objects_table(dlk_objs, "DLK"), width='stretch', hide_index=True)
-            
+            _display_metrics(_summarize_objects_table(dlk_objs, "DLK"), "DLK")
+
         with tab_tamar:
             if tamar_objs:
-                df_tbl = _summarize_tamar_with_spread(tamar_objs)
-                st.dataframe(df_tbl, width='stretch', hide_index=True)
+                _display_metrics(_summarize_tamar_with_spread(tamar_objs), "TAMAR")
             else:
                 st.info("Sin datos TAMAR o TEM no disponible.")
-    
+
         with tab_cer_bonos:
-            st.dataframe(_summarize_objects_table(cer_bonos_objs, "CER Bono"), width='stretch', hide_index=True)
-    
+            _display_metrics(_summarize_objects_table(cer_bonos_objs, "CER Bono"), "CER Bono")
+
         with tab_cer_letras:
-            st.dataframe(_summarize_objects_table(cer_letras_objs, "CER Letra"), width='stretch', hide_index=True)
+            _display_metrics(_summarize_objects_table(cer_letras_objs, "CER Letra"), "CER Letra")
     
         st.divider()
     
