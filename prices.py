@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from urllib3.exceptions import InsecureRequestWarning
 from requests.exceptions import HTTPError, RequestException, ConnectTimeout, ReadTimeout
 import os
+import holidays
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -154,7 +155,7 @@ def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) 
     pos_n = max(pos - n, 0)
     return idx[pos_n]
 
-# === Uso (una sola vez) ===
+# === Carga y procesamiento TAMAR ===
 try:
     df_tamar_raw = fetch_tamar_df(44)
 except Exception as e:
@@ -164,75 +165,102 @@ except Exception as e:
 if df_tamar_raw.empty:
     st.info("Sin datos TAMAR disponibles por ahora.")
 else:
-    # % NA -> decimal
-    df_tamar = (
+    # Procesar como porcentaje (valor en %)
+    data_tamar = (
         df_tamar_raw
-        .rename(columns={"valor": "tamar_na_pct"})
-        .assign(tamar_na_dec=lambda d: d["tamar_na_pct"].apply(lambda x: x/100.0 if x is not None else np.nan))
+        .assign(
+            fecha=pd.to_datetime(df_tamar_raw["fecha"], errors="coerce"),
+            valor=pd.to_numeric(df_tamar_raw["valor"], errors="coerce"),
+        )
+        .dropna(subset=["fecha", "valor"])
         .set_index("fecha")
         .sort_index()
     )
 
-    idx    = df_tamar.index
-    today  = pd.Timestamp.today().normalize()
-    jan29  = pd.Timestamp(year=today.year, month=1, day=29)  # duales
-    ago18  = pd.Timestamp(year=today.year, month=8, day=18)  # M10N5 / M16E6
-    ago29  = pd.Timestamp(year=today.year, month=8, day=29)  # M27F6
-    nov10  = pd.Timestamp(year=today.year, month=11, day=10)
-    nov28  = pd.Timestamp(year=today.year, month=11, day=28)
+    idx   = data_tamar.index
+    today = pd.Timestamp.today().normalize()
+
+    # Anclas de emisión (fechas fijas según prospecto)
+    jan29  = pd.Timestamp(year=2025, month=1,  day=29)
+    ago18  = pd.Timestamp(year=2025, month=8,  day=18)
+    ago29  = pd.Timestamp(year=2025, month=8,  day=29)
+    ago19  = pd.Timestamp(year=2025, month=8,  day=19)
+    nov10  = pd.Timestamp(year=2025, month=11, day=10)
+    nov28  = pd.Timestamp(year=2025, month=11, day=28)
+    feb13  = pd.Timestamp(year=2026, month=2,  day=13)
+    mar31  = pd.Timestamp(year=2026, month=3,  day=31)
 
     start        = rows_before_label(idx, jan29,  9)
     start_m10n5  = rows_before_label(idx, ago18,  9)
     start_m16e6  = rows_before_label(idx, ago18,  9)
     start_m27f6  = rows_before_label(idx, ago29,  9)
-    start_m31g6  = rows_before_label(idx, nov10, 9)
-    start_m30a6  = rows_before_label(idx, nov28, 9)
+    start_m28n5  = rows_before_label(idx, ago19,  9)
+    start_m31g6  = rows_before_label(idx, nov10,  9)
+    start_m30a6  = rows_before_label(idx, nov28,  9)
+    start_tmf27  = rows_before_label(idx, feb13,  9)
+    start_tmg27  = rows_before_label(idx, mar31,  9)
     end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
 
-    s = "tamar_na_dec"
-    tamar_window         = df_tamar.loc[start:end, s]
-    tamar_window_m10n5   = df_tamar.loc[start_m10n5:end, s]
-    tamar_window_m16e6   = df_tamar.loc[start_m16e6:end, s]
-    tamar_window_m27f6   = df_tamar.loc[start_m27f6:end, s]
-    tamar_window_m31g6   = df_tamar.loc[start_m31g6:end, s]
-    tamar_window_m30a6   = df_tamar.loc[start_m30a6:end, s]
+    tamar_window         = data_tamar.loc[start:end,       "valor"]
+    tamar_window_m10n5   = data_tamar.loc[start_m10n5:end, "valor"]
+    tamar_window_m16e6   = data_tamar.loc[start_m16e6:end, "valor"]
+    tamar_window_m27f6   = data_tamar.loc[start_m27f6:end, "valor"]
+    tamar_window_m28n5   = data_tamar.loc[start_m28n5:end, "valor"]
+    tamar_window_m31g6   = data_tamar.loc[start_m31g6:end, "valor"]
+    tamar_window_m30a6   = data_tamar.loc[start_m30a6:end, "valor"]
+    tamar_window_tmf27   = data_tamar.loc[start_tmf27:end, "valor"]
+    tamar_window_tmg27   = data_tamar.loc[start_tmg27:end, "valor"]
 
-    tamar_avg_na       = float(tamar_window.mean())
-    tamar_avg_na_m10n5 = float(tamar_window_m10n5.mean()) + 0.06   # +6pp -> +0.06 en decimal
-    tamar_avg_na_m16e6 = float(tamar_window_m16e6.mean()) + 0.075  # +7.5pp
-    tamar_avg_na_m27f6 = float(tamar_window_m27f6.mean()) + 0.015  # +1.5pp
-    tamar_avg_na_m31g6 = float(tamar_window_m31g6.mean()) + 0.05
-    tamar_avg_na_m30a6 = float(tamar_window_m30a6.mean()) + 0.04
+    # Promedios en % TNA + spreads en pp
+    tamar_avg_pct_na        = float(tamar_window.mean())
+    tamar_avg_pct_na_m10n5  = float(tamar_window_m10n5.mean()) + 6
+    tamar_avg_pct_na_m16e6  = float(tamar_window_m16e6.mean()) + 7.5
+    tamar_avg_pct_na_m27f6  = float(tamar_window_m27f6.mean()) + 1.5
+    tamar_avg_pct_na_m28n5  = float(tamar_window_m28n5.mean()) + 1
+    tamar_avg_pct_na_m31g6  = float(tamar_window_m31g6.mean()) + 5
+    tamar_avg_pct_na_m30a6  = float(tamar_window_m30a6.mean()) + 4
+    tamar_avg_pct_na_tmf27  = float(tamar_window_tmf27.mean()) + 6.5
+    tamar_avg_pct_na_tmg27  = float(tamar_window_tmg27.mean()) + 6
 
-    # (1 + r_na * 32/365) ^ (365/32) -> EA ; luego ^(1/12) - 1 -> TEM
-    def na_avg_to_tem(avg_na_dec: float) -> float:
-        return ((1 + avg_na_dec * 32/365)**(365/32))**(1/12) - 1
+    # Último valor TAMAR disponible (en %)
+    tamar_hoy = float(data_tamar.loc[data_tamar.index <= today, "valor"].iloc[-1])
 
-    tamar_tem       = na_avg_to_tem(tamar_avg_na)
-    tamar_tem_m10n5 = na_avg_to_tem(tamar_avg_na_m10n5)
-    tamar_tem_m16e6 = na_avg_to_tem(tamar_avg_na_m16e6)
-    tamar_tem_m27f6 = na_avg_to_tem(tamar_avg_na_m27f6)
-    tamar_tem_m31g6 = na_avg_to_tem(tamar_avg_na_m31g6)
-    tamar_tem_m30a6 = na_avg_to_tem(tamar_avg_na_m30a6)
+    def hybrid_tamar_tem(avg_tamar_na_pct, tamar_hoy_na_pct, start_date, end_date):
+        """TEM % híbrida: promedio ponderado por días entre TAMAR histórico y actual."""
+        _today         = datetime.today().date()
+        total_days     = (end_date.date() - start_date.date()).days
+        elapsed_days   = max(0, min((_today - start_date.date()).days, total_days))
+        remaining_days = max(0, total_days - elapsed_days)
+        if total_days == 0:
+            return 0.0
+        hybrid_na = (avg_tamar_na_pct * elapsed_days + tamar_hoy_na_pct * remaining_days) / total_days
+        return (((1 + hybrid_na / 100 * 32/365) ** (365/32)) ** (1/12) - 1) * 100
 
-    # último valor observado (<= hoy)
-    tamar_hoy = float(df_tamar.loc[df_tamar.index <= today, "tamar_na_pct"].iloc[-1])
-
-    # Si después lo llevás a build_lecaps_metrics (que espera %), recordá multiplicar por 100:
-    # ej: TEM_% = tamar_tem * 100.0
+    # TEM % por instrumento (valor que entra en tamar_rows)
+    tamar_tem_m30a6 = hybrid_tamar_tem(tamar_avg_pct_na_m30a6, tamar_hoy + 4,   datetime(2025,11,28), datetime(2026, 4,30))
+    tamar_tem_m31g6 = hybrid_tamar_tem(tamar_avg_pct_na_m31g6, tamar_hoy + 5,   datetime(2025,11,10), datetime(2026, 8,31))
+    tamar_tem_tmf27 = hybrid_tamar_tem(tamar_avg_pct_na_tmf27, tamar_hoy + 6.5, datetime(2026, 2,13), datetime(2027, 2,26))
+    tamar_tem_tmg27 = hybrid_tamar_tem(tamar_avg_pct_na_tmg27, tamar_hoy + 6,   datetime(2026, 3,31), datetime(2027, 8,31))
+    tamar_tem_ttj26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026, 6,30))
+    tamar_tem_tts26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026, 9,15))
+    tamar_tem_ttd26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026,12,15))
+    # compatibilidad con referencias existentes
+    tamar_tem = tamar_tem_ttj26
 
 # --- TNA30 TAMAR de referencia por ticker (TEM mensual -> TNA30 %) ---
 def _tamar_ref_tna30_pct(ticker: str) -> float:
-    # tus TEM están en DECIMAL mensual -> TNA30 % = TEM*12*100
+    # TEM en % mensual -> TNA30 % = TEM * 12
     base = {
-        "M10N5": tamar_tem_m10n5,
-        "M16E6": tamar_tem_m16e6,
-        "M27F6": tamar_tem_m27f6,
         "M31G6": tamar_tem_m31g6,
         "M30A6": tamar_tem_m30a6,
+        "TMF27": tamar_tem_tmf27,
+        "TMG27": tamar_tem_tmg27,
+        "TTJ26": tamar_tem_ttj26,
+        "TTS26": tamar_tem_tts26,
+        "TTD26": tamar_tem_ttd26,
     }
-    tem_ref = base.get(ticker, tamar_tem)        # default: TAMAR base
-    return round(tem_ref * 12.0 * 100.0, 2)      # % TNA30
+    tem_ref = base.get(ticker, tamar_tem)
+    return round(tem_ref * 12.0, 2)   # TEM% * 12 = TNA30 %
 
 # --- helpers para armar DF y graficar ---
 def _fmt_date(d):
@@ -2276,6 +2304,15 @@ def build_lecaps_metrics(rows, df_all, today=None):
 
             direct = ((1 + (tirea or 0)/100.0)**(dur or 0) - 1.0)*100.0 if pd.notna(tirea) and pd.notna(dur) else np.nan
 
+            # Variacion del dia
+            var_row = mkt.loc[mkt["symbol"] == r["Ticker"]] if "symbol" in mkt.columns else pd.DataFrame()
+            var_dia = np.nan
+            if not var_row.empty:
+                rv = var_row.iloc[0]
+                for col in ("pct_change","change_pct","var_pct","variacion","change","d_pct"):
+                    if col in rv.index and pd.notna(rv[col]):
+                        var_dia = float(rv[col]); break
+
             out.append({
                 "Ticker": r["Ticker"],
                 "Tipo": r["Tipo"],
@@ -2287,6 +2324,7 @@ def build_lecaps_metrics(rows, df_all, today=None):
                 "TEM": round(tem_i, 2) if pd.notna(tem_i) else np.nan,
                 "Duration": round(dur, 2) if pd.notna(dur) else np.nan,
                 "Modified Duration": round(md, 2) if pd.notna(md) else np.nan,
+                "Var. Dia (%)": round(var_dia, 2) if pd.notna(var_dia) else np.nan,
             })
         except Exception:
             out.append({
@@ -2300,12 +2338,13 @@ def build_lecaps_metrics(rows, df_all, today=None):
                 "TEM": np.nan,
                 "Duration": np.nan,
                 "Modified Duration": np.nan,
+                "Var. Dia (%)": np.nan,
             })
 
     cols = [
         "Ticker","Tipo","Vencimiento","Precio",
         "Rendimiento (TIR EA)","Retorno Directo","TNA 30","TEM",
-        "Duration","Modified Duration"
+        "Duration","Modified Duration","Var. Dia (%)"
     ]
     return pd.DataFrame(out)[cols]
     
@@ -3184,7 +3223,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
 
     # ── Tesoro AO (exact schedule) ────────────────────────────────
     ao_27 = bond_exact_schedule(
-        name="AO27", emisor="Tesoro Nacional", curr="MEP", law="ARG",
+        name="AO27", emisor="Tesoro Nacional", curr="USD", law="ARG",
         start_date=datetime(2026,2,27), end_date=datetime(2027,10,29),
         payment_frequency=1,
         amortization_dates=["2027-10-29"], amortizations=[100],
@@ -3198,7 +3237,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         ])
 
     ao_28 = bond_exact_schedule(
-        name="AO28", emisor="Tesoro Nacional", curr="MEP", law="ARG",
+        name="AO28", emisor="Tesoro Nacional", curr="USD", law="ARG",
         start_date=datetime(2026,3,31), end_date=datetime(2028,10,31),
         payment_frequency=1,
         amortization_dates=["2028-10-31"], amortizations=[100],
@@ -3312,10 +3351,6 @@ LECAPS_ROWS = [
     ("T31Y7","31/5/2027" ,"15/12/2025" , 2.4  , "Fija"),
     ("T30A7","30/4/2027" ,"31/10/2025" , 2.55 , "Fija"),
     ("T30J7","30/07/2027","16/01/2026" , 2.58 , "Fija"),
-    ("TTM26","16/3/2026" ,"29/1/2025"  , 2.225, "Fija"),
-    ("TTJ26","30/6/2026" ,"29/1/2025"  , 2.19 , "Fija"),
-    ("TTS26","15/9/2026" ,"29/01/2025" , 2.17 , "Fija"),
-    ("TTD26","15/12/2026","29/01/2025" , 2.14 , "Fija")
 ]
 
 # --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
@@ -3764,7 +3799,24 @@ def main():
         df_lecaps = pd.concat([df_lecaps, df_extra_bonos], ignore_index=True)
     
         st.subheader("Métricas de LECAPs/BONCAPs")
-        st.dataframe(df_lecaps, width='stretch', hide_index=True)
+        lecaps_cols = ["Ticker", "Vencimiento", "Precio", "Rendimiento (TIR EA)", "Retorno Directo", "Var. Dia (%)"]
+        df_lecaps_display = df_lecaps[[c for c in lecaps_cols if c in df_lecaps.columns]].copy()
+
+        def _color_var_lec(val):
+            if pd.isna(val): return ""
+            return "color: #16a34a; font-weight:600" if val > 0 else ("color: #dc2626; font-weight:600" if val < 0 else "")
+
+        styled_lec = df_lecaps_display.style.format({
+            "Precio":               "{:.2f}",
+            "Rendimiento (TIR EA)": "{:.2f}%",
+            "Retorno Directo":      "{:.2f}%",
+            "Var. Dia (%)":         lambda v: f"{v:+.2f}%" if pd.notna(v) else "—",
+        }, na_rep="—")
+        try:
+            styled_lec = styled_lec.map(_color_var_lec, subset=["Var. Dia (%)"])
+        except AttributeError:
+            styled_lec = styled_lec.applymap(_color_var_lec, subset=["Var. Dia (%)"])
+        st.dataframe(styled_lec, use_container_width=True, hide_index=True)
     
         # ---------- Objetos para cálculos (solo LECAPs) ----------
 
@@ -3972,135 +4024,6 @@ def main():
                 )
                 st.plotly_chart(fig, width='stretch')
     
-        # ---------- TC implícito MEP->LECAP/BONCAP + Bandas ----------
-        st.divider()
-        st.subheader("TC implícito al vencimiento (MEP→LECAP/BONCAP) con bandas")
-    
-        # Intento obtener un valor por defecto de MEP a partir de AL30
-        try:
-            if isinstance(df_mep, pd.DataFrame) and not df_mep.empty:
-                mep_default = float(
-                    df_mep.loc[df_mep["ticker"].str.upper() == "AL30", "close"].iloc[0]
-                )
-            else:
-                mep_default = 1000.0
-        except Exception:
-            mep_default = 1000.0
-
-        # El usuario lo puede modificar
-        mep_rate = st.number_input(
-            "MEP actual (ARS por USD)", 
-            min_value=0.0, 
-            step=1.0, 
-            value=mep_default, 
-            key="mep_rate_input"
-        )
-    
-        # Selección de tickers a mostrar
-        # --- TC implícito MEP→LECAP/BONCAP (excluyendo algunos tickers) ---
-        
-        # Universo filtrado (sin excluidos)
-        tickers_fx_all = sorted(le_map.keys()) if le_map else []
-        tickers_fx = [t for t in tickers_fx_all if t not in excl]
-
-        sel_fx = st.multiselect("Elegí LECAPs/BONCAPs para el gráfico de TC implícito", tickers_fx, default=tickers_fx)
-    
-        if not le_map or not sel_fx:
-            st.info("Seleccioná al menos una LECAP/BONCAP.")
-        else:
-            # Pago final por 100 VN en LECAP/BONCAP
-            def final_payment(obj: lecaps) -> float:
-                # replica lógica: 100 * (1+TEM)^(meses_30/360)
-                capital = 100.0
-                months = obj._months_30_360()
-                return capital * ((1.0 + obj.tem) ** months)
-    
-            # Bandas: parten 2025-04-07 en 1400/1000 y crecen 1% mensual prorrateado por días hábiles (Merval).
-            base_date = datetime(2025, 4, 7)
-            cal = ql.Argentina(ql.Argentina.Merval)
-            per_bd_factor = 1.01 ** (1.0 / 21.0)  - 1# 1% por ~21 hábiles/mes
-    
-            rows_fx = []
-            for tkr in sel_fx:
-                obj = le_map.get(tkr)
-                if obj is None:
-                    continue
-                price = float(obj.price) if np.isfinite(obj.price) else np.nan
-                if not np.isfinite(price) or price <= 0:
-                    continue
-    
-                # TC implícito: (MEP * pago_final) / precio
-                pf = final_payment(obj)
-                tc_impl = mep_rate * (pf / price)
-    
-                # bdays desde 2025-04-07 hasta el vencimiento
-                dt_mty = obj.end_date
-                qd0 = ql.Date(base_date.day, base_date.month, base_date.year)
-                qd1 = ql.Date(dt_mty.day, dt_mty.month, dt_mty.year)
-                bdays = cal.businessDaysBetween(qd0, qd1, False, False)  # sin contar extremos
-    
-                band_upper = 1400.0 * ((1 + per_bd_factor) ** bdays)
-                band_lower = 1000.0 * ((1 - per_bd_factor) ** bdays)
-    
-                rows_fx.append({
-                    "Ticker": tkr,
-                    "Vencimiento": dt_mty.date(),
-                    "Precio": price,
-                    "Pago final por 100": pf,
-                    "TC implícito": tc_impl,
-                    "Banda sup": band_upper,
-                    "Banda inf": band_lower,
-                })
-    
-            df_fx = pd.DataFrame(rows_fx)
-            if df_fx.empty:
-                st.info("No hay datos suficientes para calcular el TC implícito.")
-            else:
-                # Gráfico: puntos por Ticker (TC implícito) + líneas de bandas vs. Vencimiento
-                df_fx = df_fx.sort_values("Vencimiento")
-    
-                # Serie de fechas y bandas
-                x_dates = pd.to_datetime(df_fx["Vencimiento"]).to_list()
-                y_sup = df_fx["Banda sup"].to_list()
-                y_inf = df_fx["Banda inf"].to_list()
-    
-                fig_fx = go.Figure()
-                # Bandas
-                fig_fx.add_trace(go.Scatter(
-                    x=x_dates, y=y_sup, mode="lines", name="Banda superior (1%/mes háb.)"
-                ))
-                fig_fx.add_trace(go.Scatter(
-                    x=x_dates, y=y_inf, mode="lines", name="Banda inferior (1%/mes háb.)"
-                ))
-                # Puntos TC implícito
-                fig_fx.add_trace(go.Scatter(
-                    x=x_dates,
-                    y=df_fx["TC implícito"],
-                    mode="markers+text",
-                    name="TC implícito (MEP→LECAP/BONCAP)",
-                    text=df_fx["Ticker"],
-                    textposition="top center",
-                    hovertext=[
-                        f"{r['Ticker']} | Vto: {r['Vencimiento']}<br>"
-                        f"Precio: {r['Precio']:.2f} | Pago100: {r['Pago final por 100']:.2f}<br>"
-                        f"TC implícito: {r['TC implícito']:.2f}"
-                        for _, r in df_fx.iterrows()
-                    ],
-                    hoverinfo="text",
-                    marker=dict(size=12, line=dict(width=1))
-                ))
-                fig_fx.update_layout(
-                    xaxis_title="Fecha de vencimiento",
-                    yaxis_title="ARS por USD",
-                    legend_title="Series",
-                    height=480,
-                    margin=dict(l=10, r=10, t=10, b=10),
-                )
-                st.plotly_chart(fig_fx, width='stretch')
-            
-    # =========================
-    # Sección: Otros
-    # =========================
     elif page == "CER - DLK - TAMAR":        
         
         dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
@@ -4109,10 +4032,15 @@ def main():
         # ---------- Datos base ----------
         df_all_norm = normalize_market_df(df_all)
     
-        # CER t-10 hábiles
+        # CER t-10 hábiles (calendario Argentina)
         try:
-            df_cer_series = fetch_cer_df(30,  daily_key=dkey)
-            target_cer = last_business_day_arg(10)
+            df_cer_series = fetch_cer_df(30, daily_key=dkey)
+            _today_d = date.today()
+            ar_holidays_cal = holidays.Argentina(years=[_today_d.year, _today_d.year - 1])
+            ar_holiday_list = [str(d) for d in ar_holidays_cal.keys()]
+            ar_calendar = np.busdaycalendar(holidays=ar_holiday_list)
+            fecha_10_dias = np.busday_offset(_today_d, -10, roll="preceding", busdaycal=ar_calendar)
+            target_cer = pd.Timestamp(fecha_10_dias).date()
             cer_final = cer_at_or_before(df_cer_series, target_cer)
         except Exception as e:
             st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
@@ -4181,27 +4109,22 @@ def main():
     
         # ---------- CER Letras (rows → objetos) ----------
         cer_rows = [
-            #("TZXO5", "31/10/2025", "31/10/2024", 480.2, "CER"),
-            # ("TZXD5", "15/12/2025", "15/3/2024", 271.0, "CER"),
-            ("TZXM6", "31/3/2026" , "30/4/2024" , 337.0   ,"CER"),
-            ("X15Y6", "15/5/2026" , "27/2/2026" , 701.614 ,"CER"),
-            ("X29Y6", "29/5/2026" , "28/11/2025", 651.8981,"CER"),
-            ("TZX26", "30/6/2026" , "1/2/2024"  , 200.4   ,"CER"),
-            ("X31L6", "31/7/2026" , "30/1/2026" , 685.5506,"CER"),
-            ("S30S6", "30/9/2026" , "16/3/2026" , 715.7152,"CER"),
-            ("TZXO6", "30/10/2026", "31/10/2024", 480.2   ,"CER"),
-            ("X30N6", "30/11/2026", "15/12/2025", 659.6789,"CER"),
-            ("TZXD6", "15/12/2026", "15/3/2024" , 271.0   ,"CER"),
-            ("TZXM7", "31/3/2027" , "20/5/2024" , 361.3   ,"CER"),
-            ("TZXA7", "30/4/2027" , "28/11/2025", 651.8981,"CER"),
-            ("TZXY7", "31/5/2027" , "15/12/2025", 659.6789,"CER"),
-            ("TZX27", "30/6/2027" , "1/2/2024"  , 200.4   ,"CER"),
-            ("TZXS7", "30/9/2027" , "31/3/2026" , 725.8754,"CER"),
-            ("TZXD7", "15/12/2027", "15/3/2024" , 271.0   ,"CER"),
-            ("TZXM8", "31/3/2028" , "31/3/2026" , 725.8754,"CER"),
-            ("TZX28", "30/6/2028" , "1/2/2024"  , 200.4   ,"CER"),
-            ("TZXS8", "29/9/2028" , "31/3/2026" , 725.8754,"CER"),
-            ("TZXM9", "31/3/2029" , "31/3/2026" , 725.8754,"CER"),
+            ("X15Y6", "15/5/2026" , "27/2/2026" , 701.614 , "CER"),
+            ("X29Y6", "29/5/2026" , "28/11/2025", 651.8981, "CER"),
+            ("TZX26", "30/6/2026" , "1/2/2024"  , 200.4   , "CER"),
+            ("X31L6", "31/7/2026" , "30/1/2026" , 685.5506, "CER"),
+            ("X30S6", "30/9/2026" , "16/3/2026" , 715.7152, "CER"),
+            ("TZXO6", "30/10/2026", "31/10/2024", 480.2   , "CER"),
+            ("X30N6", "30/11/2026", "15/12/2025", 659.6789, "CER"),
+            ("TZXD6", "15/12/2026", "15/3/2024" , 271.0   , "CER"),
+            ("TZXM7", "31/3/2027" , "20/5/2024" , 361.3   , "CER"),
+            ("TZXA7", "30/4/2027" , "28/11/2025", 651.8981, "CER"),
+            ("TZXY7", "31/5/2027" , "15/12/2025", 659.6789, "CER"),
+            ("TZX27", "30/6/2027" , "1/2/2024"  , 200.4   , "CER"),
+            ("TZXS7", "30/9/2027" , "31/3/2026" , 725.8754, "CER"),
+            ("TZXD7", "15/12/2027", "15/3/2024" , 271.0   , "CER"),
+            ("TZX28", "30/6/2028" , "1/2/2024"  , 200.4   , "CER"),
+            ("TZXS8", "29/9/2028" , "31/3/2026" , 725.8754, "CER"),
         ]
         cer_letras_objs = []
         for tk, vto, emi, cer_ini, _ in cer_rows:
@@ -4229,14 +4152,11 @@ def main():
             # ---------- DLK (usa oficial t-1) ----------
         # ---------- DLK (siempre mostrar todos los tickers) ----------
         dlk_rows = [
-            # ("D31O5", "10/07/2025", "31/10/2025", "Dólar Linked"),
-            # ("D28N5", "30/09/2025", "28/11/2025", "Dólar Linked"),
-            # ("TZVD5", "01/07/2024", "15/12/2025", "Dólar Linked"),
-            # ("D16E6", "28/04/2025", "16/01/2026", "Dólar Linked"),
-             ("D30E6", "17/10/2025", "30/01/2026", "Dolar Linked"),
-            ("D27F6", "16/01/2026", "27/02/2026", "Dolar Linked"),
-            ("D30A6", "30/09/2025", "30/04/2026", "Dólar Linked"),
-            ("TZV26", "28/02/2024", "30/06/2026", "Dólar Linked"),
+            ("D30A6", "30/09/2025", "30/04/2026", "Dolar Linked"),
+            ("D30S6", "16/03/2026", "30/09/2026", "Dolar Linked"),
+            ("TZV26", "28/02/2024", "30/06/2026", "Dolar Linked"),
+            ("TZV27", "27/02/2026", "30/06/2027", "Dolar Linked"),
+            ("TZV28", "31/03/2026", "30/06/2028", "Dolar Linked"),
         ]
         
         def _price_any(df_all_norm, sym, prefer="px_ask"):
@@ -4317,15 +4237,13 @@ def main():
         # asumimos tamar_tem, tamar_tem_m10n5, tamar_tem_m16e6, tamar_tem_m27f6 disponibles
         try:
             tamar_rows = [
-                # ("M10N5","10/11/2025","18/08/2025",tamar_tem_m10n5, "TAMAR"),
-                # ("M16E6","16/1/2026","18/08/2025",tamar_tem_m16e6, "TAMAR"),
-                # ("M27F6","27/2/2026","10/11/2025",tamar_tem_m27f6, "TAMAR"),
-                ("M30A6","30/4/2026" ,"28/11/2025",tamar_tem_m30a6,"TAMAR"),
-                ("M31G6","31/8/2026","29/08/2025",tamar_tem_m31g6, "TAMAR"),
-                ("TTM26","16/3/2026","29/1/2025", tamar_tem,        "TAMAR"),
-                ("TTJ26","30/6/2026","29/1/2025", tamar_tem,        "TAMAR"),
-                ("TTS26","15/9/2026","29/01/2025",tamar_tem,        "TAMAR"),
-                ("TTD26","15/12/2026","29/01/2025",tamar_tem,       "TAMAR")
+                ("M30A6","30/4/2026" ,"28/11/2025", tamar_tem_m30a6, "TAMAR"),
+                ("M31G6","31/8/2026" ,"10/11/2025", tamar_tem_m31g6, "TAMAR"),
+                ("TMF27","26/2/2027" ,"13/2/2026" , tamar_tem_tmf27, "TAMAR"),
+                ("TMG27","31/8/2027" ,"31/3/2026" , tamar_tem_tmg27, "TAMAR"),
+                ("TTJ26","30/6/2026" ,"29/1/2025" , tamar_tem_ttj26, "TAMAR"),
+                ("TTS26","15/9/2026" ,"29/01/2025", tamar_tem_tts26, "TAMAR"),
+                ("TTD26","15/12/2026","29/01/2025", tamar_tem_ttd26, "TAMAR"),
             ]
             le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm)  # {ticker: lecaps}
             tamar_objs = list(le_map_tamar.values())
