@@ -3337,12 +3337,10 @@ def main():
 
         # ── Filtros ──
         st.subheader("Filtros")
-        fc1, fc2, fc3, fc4 = st.columns(4)
+        fc1, fc2 = st.columns(2)
 
         emisores_ons = sorted(df_ons["Emisor"].dropna().unique().tolist())
         monedas_ons  = sorted(df_ons["Moneda de Pago"].dropna().unique().tolist())
-        leyes_ons    = sorted(df_ons["Ley"].dropna().unique().tolist())
-        califs_ons   = sorted(df_ons["Calificación"].dropna().unique().tolist())
 
         with fc1:
             chk_em = st.checkbox("Todos los emisores", value=True, key="ons_chk_em")
@@ -3356,23 +3354,9 @@ def main():
                                    default=monedas_ons if chk_mon else [], key="ons_f_mon")
             if chk_mon: f_mon = monedas_ons
 
-        with fc3:
-            chk_ley = st.checkbox("Todas las leyes", value=True, key="ons_chk_ley")
-            f_ley = st.multiselect("Ley", leyes_ons,
-                                   default=leyes_ons if chk_ley else [], key="ons_f_ley")
-            if chk_ley: f_ley = leyes_ons
-
-        with fc4:
-            chk_cal = st.checkbox("Todas las calificaciones", value=True, key="ons_chk_cal")
-            f_cal = st.multiselect("Calificación", califs_ons,
-                                   default=califs_ons if chk_cal else [], key="ons_f_cal")
-            if chk_cal: f_cal = califs_ons
-
         mask_ons = (
             df_ons["Emisor"].isin(f_em)
             & df_ons["Moneda de Pago"].isin(f_mon)
-            & df_ons["Ley"].isin(f_ley)
-            & df_ons["Calificación"].isin(f_cal)
         )
         df_ons_filt = df_ons.loc[mask_ons].reset_index(drop=True)
 
