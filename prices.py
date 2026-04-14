@@ -1780,8 +1780,6 @@ def load_market_data():
     df_corps = to_df(fetch_json(url_corps)); df_corps["source"] = "corps"
     df_mep   = to_df(fetch_json(url_mep));   df_mep["source"]   = "mep"
 
-    mep      = df_mep.loc[df_mep["ticker"] == "AL30", "ask"].iloc[0]
-
     df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
     return df_all, df_mep
 @st.cache_data(ttl=300)
@@ -1798,6 +1796,62 @@ def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> fl
     if not row.empty:
         return _pick(row.iloc[0])
     raise KeyError(f"Price not found for {name} (or {name}D)")
+
+
+def get_price_ars_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> float:
+    """Obtiene el precio en ARS del ticker con sufijo 'O' (clase peso)."""
+    def _pick(row):
+        if prefer in row and pd.notna(row[prefer]): return float(row[prefer])
+        alt = "px_ask" if prefer == "px_bid" else "px_bid"
+        if alt in row and pd.notna(row[alt]): return float(row[alt])
+        raise KeyError("no valid bid/ask")
+    row = df_all.loc[df_all["symbol"] == f"{name}O"]
+    if not row.empty:
+        return _pick(row.iloc[0])
+    raise KeyError(f"ARS price not found for {name}O")
+
+
+def get_change_pct_for_symbol(df_all: pd.DataFrame, name: str) -> float:
+    """Busca la variación porcentual del día para el ticker O del símbolo.
+    Devuelve np.nan si no está disponible."""
+    ticker_o = f"{name}O"
+    row = df_all.loc[df_all["symbol"] == ticker_o] if "symbol" in df_all.columns else pd.DataFrame()
+    if row.empty:
+        return np.nan
+    r = row.iloc[0]
+    # Intentar columnas habituales de variación
+    for col in ("change_pct", "pct_change", "var_pct", "variacion", "change", "d_pct"):
+        if col in r and pd.notna(r[col]):
+            return float(r[col])
+    # Calcular desde close/prev_close si están disponibles
+    for close_col, prev_col in (("close", "prev_close"), ("px_bid", "prev_bid"), ("last", "prev_last")):
+        if close_col in r and prev_col in r and pd.notna(r[close_col]) and pd.notna(r[prev_col]):
+            prev = float(r[prev_col])
+            if prev != 0:
+                return (float(r[close_col]) / prev - 1) * 100
+    return np.nan
+
+
+def fetch_fx_rates(df_dolares: pd.DataFrame) -> dict:
+    """Extrae MEP y CCL de un DataFrame de dolarapi. Devuelve {'MEP': float, 'CCL': float}."""
+    rates = {"MEP": np.nan, "CCL": np.nan}
+    if df_dolares is None or df_dolares.empty:
+        return rates
+    df = df_dolares.copy()
+    if "Dólar" not in df.columns:
+        return rates
+    lower = df["Dólar"].astype(str).str.lower()
+    # MEP = "Bolsa"
+    mep_row = df.loc[lower.str.contains("bolsa", na=False)]
+    if not mep_row.empty:
+        v = pd.to_numeric(mep_row["Venta"].iloc[0], errors="coerce")
+        if pd.notna(v): rates["MEP"] = float(v)
+    # CCL = "Contado Con Liquidación" o "ccl" o "contado"
+    ccl_row = df.loc[lower.str.contains("contado|ccl|liquidaci", na=False)]
+    if not ccl_row.empty:
+        v = pd.to_numeric(ccl_row["Venta"].iloc[0], errors="coerce")
+        if pd.notna(v): rates["CCL"] = float(v)
+    return rates
 
 # =========================
 # Carga de ONs desde Excel
@@ -1874,6 +1928,95 @@ def load_bcp_from_excel(df_all: pd.DataFrame, adj: float = 1.0, price_col_prefer
         out.append(b)
     return out
 
+
+@st.cache_resource(show_spinner=False)
+def load_ons_from_excel(df_all: pd.DataFrame, fx_rate: float, adj: float = 1.005,
+                        price_col_prefer: str = "px_ask") -> list:
+    """
+    Carga ONs desde el Excel. Obtiene el precio de la clase 'O' (en ARS)
+    y lo divide por fx_rate (MEP o CCL) para obtener el precio en USD.
+    """
+    url_excel_raw = "https://raw.githubusercontent.com/marzanomate/bond_app/main/listado_ons.xlsx"
+    try:
+        r = requests.get(url_excel_raw, timeout=25)
+        r.raise_for_status()
+        content = r.content
+    except Exception as e:
+        raise RuntimeError(f"No se pudo descargar el Excel de ONs: {e}")
+
+    if not content.startswith(b"PK"):
+        raise RuntimeError("El contenido descargado no parece un .xlsx válido.")
+
+    try:
+        raw = pd.read_excel(io.BytesIO(content), dtype=str, engine="openpyxl")
+    except Exception as e:
+        raise RuntimeError(f"No se pudo abrir el Excel de ONs: {e}")
+
+    required = ["name","empresa","curr","law","start_date","end_date",
+                "payment_frequency","amortization_dates","amortizations",
+                "rate","outstanding","calificación"]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        raise ValueError(f"Missing columns in Excel: {missing}")
+
+    # Normalizar df_all para búsquedas
+    df_norm = normalize_market_df(df_all)
+
+    out = []
+    for _, row in raw.iterrows():
+        name   = str(row["name"]).strip()
+        emisor = str(row["empresa"]).strip()
+        curr   = str(row["curr"]).strip()
+        law    = str(row["law"]).strip()
+        start  = parse_date_cell(row["start_date"])
+        end    = parse_date_cell(row["end_date"])
+
+        pay_freq_raw = parse_float_cell(row["payment_frequency"])
+        if pd.isna(pay_freq_raw) or pay_freq_raw <= 0:
+            continue
+        pay_freq = int(round(pay_freq_raw))
+
+        am_dates = parse_date_list(row["amortization_dates"])
+        am_amts  = ([parse_float_cell(x) for x in str(row["amortizations"]).split(";")]
+                    if str(row["amortizations"]).strip() != "" else [])
+        if len(am_dates) != len(am_amts):
+            if len(am_dates) == 1 and len(am_amts) == 0:
+                am_amts = [100.0]
+            elif len(am_dates) == 0 and len(am_amts) == 1:
+                am_dates = [end.strftime("%Y-%m-%d")]
+            else:
+                continue
+
+        rate_pct = normalize_rate_to_percent(parse_float_cell(row["rate"]))
+
+        # --- Precio: primero intenta clase O (ARS / fx), luego clase D, luego directo ---
+        price = np.nan
+        if pd.notna(fx_rate) and fx_rate > 0:
+            try:
+                price_ars = get_price_ars_for_symbol(df_norm, name, prefer=price_col_prefer)
+                price = (price_ars / fx_rate) * adj
+            except Exception:
+                pass
+        if np.isnan(price):
+            try:
+                price = get_price_for_symbol(df_norm, name, prefer=price_col_prefer) * adj
+            except Exception:
+                price = np.nan
+
+        outstanding = parse_float_cell(row["outstanding"])
+        calif = str(row["calificación"]).strip()
+
+        b = bond_calculator_pro(
+            name=name, emisor=emisor, curr=curr, law=law,
+            start_date=start, end_date=end, payment_frequency=pay_freq,
+            amortization_dates=am_dates, amortizations=am_amts,
+            rate=rate_pct, price=price,
+            step_up_dates=[], step_up=[],
+            outstanding=outstanding, calificacion=calif
+        )
+        out.append(b)
+    return out
+
 # =========================
 # Tabla de métricas
 # =========================
@@ -1925,6 +2068,56 @@ def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame
     for c in ["Duration","Modified Duration","Convexidad","Precio"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").round(1)
 
+    return df.reset_index(drop=True)
+
+
+def metrics_ons(bonds: list, df_all: pd.DataFrame | None = None,
+                settlement: datetime | None = None) -> pd.DataFrame:
+    """
+    Tabla de métricas para ONs con columnas específicas:
+    TIR, MD, Moneda de Pago, Paridad, Current Yield,
+    Próxima Fecha de Pago, Fecha de Vencimiento, Variación del día.
+    """
+    df_norm = normalize_market_df(df_all) if df_all is not None and not df_all.empty else None
+    rows = []
+    stl = settlement
+    for b in bonds:
+        try:
+            dates = b.generate_payment_dates(stl)
+            prox = dates[1].strftime("%d/%m/%Y") if len(dates) > 1 and dates[1] else None
+            tir   = b.xirr(stl)
+            md    = b.modified_duration(stl)
+            par   = b.parity(stl)
+            cy    = b.current_yield(stl)
+        except Exception:
+            prox = None
+            tir = md = par = cy = np.nan
+
+        # Variación del día desde clase O
+        var_dia = np.nan
+        if df_norm is not None:
+            var_dia = get_change_pct_for_symbol(df_norm, b.name)
+
+        rows.append({
+            "Ticker":                 b.name,
+            "Emisor":                 getattr(b, "emisor", ""),
+            "Moneda de Pago":         getattr(b, "curr", ""),
+            "Ley":                    getattr(b, "law", ""),
+            "Calificación":           getattr(b, "calificacion", ""),
+            "Precio (USD)":           round(float(b.price), 2) if pd.notna(b.price) else np.nan,
+            "TIR (%)":                round(float(tir), 2) if pd.notna(tir) else np.nan,
+            "MD":                     round(float(md), 2) if pd.notna(md) else np.nan,
+            "Paridad (%)":            round(float(par), 1) if pd.notna(par) else np.nan,
+            "Current Yield (%)":      round(float(cy), 2) if pd.notna(cy) else np.nan,
+            "Próxima Fecha de Pago":  prox,
+            "Fecha de Vencimiento":   b.end_date.strftime("%d/%m/%Y") if hasattr(b, "end_date") else None,
+            "Var. Día (%)":           round(float(var_dia), 2) if pd.notna(var_dia) else np.nan,
+        })
+
+    df = pd.DataFrame(rows)
+    for c in ["TIR (%)","MD","Paridad (%)","Current Yield (%)","Precio (USD)","Var. Día (%)"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.reset_index(drop=True)
 
 # ----------------------------------------------------------------
@@ -3013,7 +3206,11 @@ def render_sidebar_info():
 
 def main():
     st.sidebar.title("Navegación")
-    page = st.sidebar.radio("Elegí sección", ["Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR"], index=0)
+    page = st.sidebar.radio(
+        "Elegí sección",
+        ["ONs", "Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR"],
+        index=0
+    )
 
     # --- Carga de mercado + botón refrescar ---
     with st.spinner("Cargando precios de mercado..."):
@@ -3025,7 +3222,6 @@ def main():
 
     if st.sidebar.button("🔄 Actualizar ahora"):
         try:
-            # clear all cache layers
             st.cache_data.clear()
             st.cache_resource.clear()
         except Exception:
@@ -3045,6 +3241,13 @@ def main():
     # Recién después normalizás precios
     df_all_norm = normalize_market_df(df_all)
 
+    # --- Tipos de cambio MEP y CCL desde dolarapi ---
+    try:
+        _fx_df = fetch_dolares()
+        _fx_rates = fetch_fx_rates(_fx_df)
+    except Exception:
+        _fx_rates = {"MEP": np.nan, "CCL": np.nan}
+
     # --- Construcción de universos ---
     try:
         ons_bonds = load_bcp_from_excel(df_all, adj=1.005, price_col_prefer="px_ask")
@@ -3057,17 +3260,232 @@ def main():
 
     # --- obtener tipo de cambio oficial (último valor disponible) ---
     try:
-        if "Dólar" in fx.columns and "Venta" in fx.columns:
-            s = fx.loc[fx["Dólar"].astype(str).str.lower().eq("Oficial"), "Venta"]
-        elif "casa" in fx.columns and "venta" in fx.columns:
-            s = fx.loc[fx["casa"].astype(str).str.lower().eq("Oficial"), "venta"]
+        if "Dólar" in _fx_df.columns and "Venta" in _fx_df.columns:
+            s = _fx_df.loc[_fx_df["Dólar"].astype(str).str.lower().eq("oficial"), "Venta"]
         else:
             s = pd.Series(dtype=float)
-    
         oficial_fx = float(s.iloc[-1]) if not s.empty else np.nan
-    
     except Exception:
         oficial_fx = np.nan
+
+    # =========================================================
+    # PAGE: Obligaciones Negociables
+    # =========================================================
+    if page == "ONs":
+        st.title("📋 Obligaciones Negociables")
+        st.caption("Precios obtenidos de la clase **O** (pesos) y convertidos a USD por MEP o CCL.")
+
+        # ── Selector MEP / CCL ──
+        col_fx1, col_fx2, col_fx3 = st.columns([1, 1, 2])
+        with col_fx1:
+            fx_mode = st.radio(
+                "Valuación en:",
+                options=["MEP", "CCL"],
+                index=0,
+                horizontal=True,
+                help="Elegí el tipo de cambio para convertir el precio en ARS (clase O) a USD.",
+                key="ons_fx_mode"
+            )
+        with col_fx2:
+            fx_default = _fx_rates.get(fx_mode, np.nan)
+            fx_default_val = float(fx_default) if pd.notna(fx_default) else 1000.0
+            fx_override = st.number_input(
+                f"TC {fx_mode} (ARS/USD)",
+                min_value=1.0,
+                step=0.5,
+                value=fx_default_val,
+                format="%.2f",
+                key="ons_fx_override",
+                help="Podés ajustar el tipo de cambio manualmente.",
+            )
+        with col_fx3:
+            mep_disp = f"{_fx_rates['MEP']:,.2f}" if pd.notna(_fx_rates.get("MEP")) else "N/D"
+            ccl_disp = f"{_fx_rates['CCL']:,.2f}" if pd.notna(_fx_rates.get("CCL")) else "N/D"
+            st.info(f"📡 MEP en vivo: **${mep_disp}** &nbsp;|&nbsp; CCL en vivo: **${ccl_disp}**", icon=None)
+
+        fx_used = fx_override
+
+        # ── Cargar ONs con precio ARS / fx ──
+        with st.spinner("Calculando métricas de ONs..."):
+            try:
+                ons_list = load_ons_from_excel(df_all_norm, fx_rate=fx_used, adj=1.0,
+                                               price_col_prefer="px_ask")
+            except Exception as e:
+                st.error(f"No se pudo cargar las ONs: {e}")
+                ons_list = []
+
+        if not ons_list:
+            st.warning("No hay ONs disponibles.")
+            return
+
+        df_ons = metrics_ons(ons_list, df_all=df_all_norm)
+
+        # ── Filtros ──
+        st.subheader("Filtros")
+        fc1, fc2, fc3, fc4 = st.columns(4)
+
+        emisores_ons = sorted(df_ons["Emisor"].dropna().unique().tolist())
+        monedas_ons  = sorted(df_ons["Moneda de Pago"].dropna().unique().tolist())
+        leyes_ons    = sorted(df_ons["Ley"].dropna().unique().tolist())
+        califs_ons   = sorted(df_ons["Calificación"].dropna().unique().tolist())
+
+        with fc1:
+            chk_em = st.checkbox("Todos los emisores", value=True, key="ons_chk_em")
+            f_em = st.multiselect("Emisor", emisores_ons,
+                                  default=emisores_ons if chk_em else [], key="ons_f_em")
+            if chk_em: f_em = emisores_ons
+
+        with fc2:
+            chk_mon = st.checkbox("Todas las monedas", value=True, key="ons_chk_mon")
+            f_mon = st.multiselect("Moneda de Pago", monedas_ons,
+                                   default=monedas_ons if chk_mon else [], key="ons_f_mon")
+            if chk_mon: f_mon = monedas_ons
+
+        with fc3:
+            chk_ley = st.checkbox("Todas las leyes", value=True, key="ons_chk_ley")
+            f_ley = st.multiselect("Ley", leyes_ons,
+                                   default=leyes_ons if chk_ley else [], key="ons_f_ley")
+            if chk_ley: f_ley = leyes_ons
+
+        with fc4:
+            chk_cal = st.checkbox("Todas las calificaciones", value=True, key="ons_chk_cal")
+            f_cal = st.multiselect("Calificación", califs_ons,
+                                   default=califs_ons if chk_cal else [], key="ons_f_cal")
+            if chk_cal: f_cal = califs_ons
+
+        mask_ons = (
+            df_ons["Emisor"].isin(f_em)
+            & df_ons["Moneda de Pago"].isin(f_mon)
+            & df_ons["Ley"].isin(f_ley)
+            & df_ons["Calificación"].isin(f_cal)
+        )
+        df_ons_filt = df_ons.loc[mask_ons].reset_index(drop=True)
+
+        # ── Tabla de métricas ──
+        st.subheader(f"Métricas de ONs — valuadas en {fx_mode} (TC: ${fx_used:,.2f})")
+
+        # Columnas visibles (ocultar Emisor/Ley/Calif de la vista principal pero dejarlas filtrables)
+        display_cols = [
+            "Ticker", "Emisor", "Moneda de Pago", "Calificación", "Ley",
+            "Precio (USD)", "TIR (%)", "MD",
+            "Paridad (%)", "Current Yield (%)",
+            "Próxima Fecha de Pago", "Fecha de Vencimiento",
+            "Var. Día (%)",
+        ]
+        df_display = df_ons_filt[[c for c in display_cols if c in df_ons_filt.columns]]
+
+        # Formateo condicional: verde/rojo para variación del día
+        def _color_var(val):
+            if pd.isna(val): return ""
+            return "color: #16a34a; font-weight:600" if val > 0 else ("color: #dc2626; font-weight:600" if val < 0 else "")
+
+        styled = df_display.style.format({
+            "Precio (USD)":       "{:.2f}",
+            "TIR (%)":            "{:.2f}%",
+            "MD":                 "{:.2f}",
+            "Paridad (%)":        "{:.1f}%",
+            "Current Yield (%)":  "{:.2f}%",
+            "Var. Día (%)":       lambda v: f"{v:+.2f}%" if pd.notna(v) else "—",
+        }, na_rep="—")
+
+        if "Var. Día (%)" in df_display.columns:
+            styled = styled.applymap(_color_var, subset=["Var. Día (%)"])
+
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        st.caption(
+            f"💡 Precio en USD = Precio ARS clase **[ticker]O** ÷ TC {fx_mode} ({fx_used:,.2f}). "
+            "Si no hay precio de clase O disponible, se usa la clase D o el precio directo."
+        )
+
+        st.divider()
+
+        # ── Curva TIR vs MD ──
+        st.subheader("Curva TIR vs MD")
+        df_curve = df_ons_filt.dropna(subset=["MD", "TIR (%)"])
+        if df_curve.empty:
+            st.info("Sin datos suficientes para graficar la curva.")
+        else:
+            fig_ons = px.scatter(
+                df_curve.sort_values("MD"),
+                x="MD", y="TIR (%)",
+                color="Moneda de Pago",
+                text="Ticker",
+                hover_data=["Emisor", "Precio (USD)", "Paridad (%)", "Fecha de Vencimiento"],
+                title=f"Curva ONs — TIR (%) vs MD  [TC {fx_mode}: {fx_used:,.2f}]",
+            )
+            fig_ons.update_traces(textposition="top center")
+            fig_ons.update_layout(
+                xaxis_title="Modified Duration (años)",
+                yaxis_title="TIR (%)",
+                legend_title="Moneda de Pago",
+                margin=dict(l=10, r=10, t=60, b=10),
+            )
+            fig_ons.update_yaxes(ticksuffix="%")
+
+            if len(df_curve) >= 2 and df_curve["MD"].nunique() >= 2:
+                xv = df_curve["MD"].to_numpy(dtype=float)
+                yv = df_curve["TIR (%)"].to_numpy(dtype=float)
+                valid = (xv > 0) & np.isfinite(xv) & np.isfinite(yv)
+                if valid.sum() >= 2:
+                    xv, yv = xv[valid], yv[valid]
+                    m, c = np.polyfit(np.log(xv), yv, 1)
+                    xl = np.linspace(xv.min(), xv.max(), 200)
+                    yl = m * np.log(xl) + c
+                    ss_res = np.sum((yv - (m * np.log(xv) + c)) ** 2)
+                    ss_tot = np.sum((yv - yv.mean()) ** 2)
+                    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+                    fig_ons.add_trace(go.Scatter(x=xl, y=yl, mode="lines",
+                                                  name="Ajuste log", hoverinfo="skip"))
+                    fig_ons.add_annotation(
+                        text=f"y = {c:.2f} + {m:.2f}·ln(MD)   R²={r2:.3f}",
+                        xref="paper", x=0.99, yref="paper", y=0.02,
+                        showarrow=False, xanchor="right", yanchor="bottom",
+                        font=dict(size=10)
+                    )
+            st.plotly_chart(fig_ons, use_container_width=True)
+
+        st.divider()
+
+        # ── Calculadora individual ──
+        st.subheader("Calculadora de ON individual")
+        ons_map = {b.name: b for b in ons_list}
+        calc_cols = st.columns([1, 1, 1])
+        with calc_cols[0]:
+            sel_on = st.selectbox("ON", sorted(ons_map.keys()), key="ons_calc_sel")
+        with calc_cols[1]:
+            precio_manual_on = st.number_input(
+                "Precio manual USD (0 = usar mercado)", min_value=0.0, step=0.1,
+                value=0.0, key="ons_calc_px"
+            )
+        with calc_cols[2]:
+            st.write("")
+            st.write("")
+            calcular_on = st.button("Calcular", key="ons_calc_btn")
+
+        if calcular_on and sel_on:
+            b_on = ons_map[sel_on]
+            px_on = precio_manual_on if precio_manual_on > 0 else b_on.price
+            b_clone = clone_with_price(b_on, px_on) if px_on and pd.notna(px_on) else b_on
+            try:
+                dates_on = b_clone.generate_payment_dates()
+                prox_on = dates_on[1].strftime("%d/%m/%Y") if len(dates_on) > 1 else "—"
+                row_on = {
+                    "Ticker":                b_clone.name,
+                    "Emisor":                getattr(b_clone, "emisor", ""),
+                    "Moneda de Pago":        getattr(b_clone, "curr", ""),
+                    "Ley":                   getattr(b_clone, "law", ""),
+                    "Precio (USD)":          round(float(b_clone.price), 2),
+                    "TIR (%)":               round(float(b_clone.xirr()), 2),
+                    "MD":                    round(float(b_clone.modified_duration()), 2),
+                    "Paridad (%)":           round(float(b_clone.parity()), 1),
+                    "Current Yield (%)":     round(float(b_clone.current_yield()), 2),
+                    "Próxima Fecha de Pago": prox_on,
+                    "Fecha de Vencimiento":  b_clone.end_date.strftime("%d/%m/%Y"),
+                }
+                st.dataframe(pd.DataFrame([row_on]), hide_index=True, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error al calcular métricas: {e}")
 
     if page == "Bonos HD":
         st.title("Bonos HD")
