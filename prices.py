@@ -2077,16 +2077,29 @@ def metrics_ons(bonds: list, df_all: pd.DataFrame | None = None,
     rows = []
     stl = settlement
     for b in bonds:
+        # generate_payment_dates devuelve strings "%Y-%m-%d", no datetimes
         try:
             dates = b.generate_payment_dates(stl)
-            prox = dates[1].strftime("%d/%m/%Y") if len(dates) > 1 and dates[1] else None
-            tir   = b.xirr(stl)
-            md    = b.modified_duration(stl)
-            par   = b.parity(stl)
-            cy    = b.current_yield(stl)
+            prox = (datetime.strptime(dates[1], "%Y-%m-%d").strftime("%d/%m/%Y")
+                    if len(dates) > 1 else None)
         except Exception:
             prox = None
-            tir = md = par = cy = np.nan
+        try:
+            tir = b.xirr(stl)
+        except Exception:
+            tir = np.nan
+        try:
+            md = b.modified_duration(stl)
+        except Exception:
+            md = np.nan
+        try:
+            par = b.parity(stl)
+        except Exception:
+            par = np.nan
+        try:
+            cy = b.current_yield(stl)
+        except Exception:
+            cy = np.nan
 
         # Variación del día desde clase O
         var_dia = np.nan
