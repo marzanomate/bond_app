@@ -3184,7 +3184,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
 
     # ── Tesoro AO (exact schedule) ────────────────────────────────
     ao_27 = bond_exact_schedule(
-        name="AO27", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        name="AO27", emisor="Tesoro Nacional", curr="MEP", law="ARG",
         start_date=datetime(2026,2,27), end_date=datetime(2027,10,29),
         payment_frequency=1,
         amortization_dates=["2027-10-29"], amortizations=[100],
@@ -3198,7 +3198,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         ])
 
     ao_28 = bond_exact_schedule(
-        name="AO28", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        name="AO28", emisor="Tesoro Nacional", curr="MEP", law="ARG",
         start_date=datetime(2026,3,31), end_date=datetime(2028,10,31),
         payment_frequency=1,
         amortization_dates=["2028-10-31"], amortizations=[100],
