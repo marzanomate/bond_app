@@ -3223,7 +3223,7 @@ def main():
     st.sidebar.title("Navegación")
     page = st.sidebar.radio(
         "Elegí sección",
-        ["ONs", "Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR"],
+        ["Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR"],
         index=0
     )
 
@@ -3286,8 +3286,8 @@ def main():
     # =========================================================
     # PAGE: Obligaciones Negociables
     # =========================================================
-    if page == "ONs":
-        st.title("📋 Obligaciones Negociables")
+    if page == "Bonos HD":
+        st.title("📋 Bonos HD")
         st.caption("Precios obtenidos de la clase **O** (pesos) y convertidos a USD por MEP o CCL.")
 
         # ── Selector MEP / CCL ──
@@ -3486,75 +3486,6 @@ def main():
                 st.dataframe(pd.DataFrame([row_on]), hide_index=True, use_container_width=True)
             except Exception as e:
                 st.error(f"Error al calcular métricas: {e}")
-
-    if page == "Bonos HD":
-        st.title("Bonos HD")
-        st.caption("Explorar métricas de Bonos HD")
-
-        # =========================
-        # 1) TABLA DE MÉTRICAS + FILTROS
-        # =========================
-        st.subheader("Métricas")
-        df_full = metrics_bcp(all_bonds)
-        
-        # Filtros
-        colf1, colf2, colf3, colf4 = st.columns(4)
-        
-        emisores = sorted([e for e in df_full["Emisor"].dropna().unique()])
-        monedas  = sorted([m for m in df_full["Moneda de Pago"].dropna().unique()])
-        leyes    = sorted([l for l in df_full["Ley"].dropna().unique()])
-        tickers  = sorted([t for t in df_full["Ticker"].dropna().unique()])
-        
-        with colf1:
-            all_emisores = st.checkbox("Todos los emisores", value=True)
-            f_emisor = st.multiselect("Filtrar Emisor", emisores, default=emisores if all_emisores else [])
-            if all_emisores:
-                f_emisor = emisores
-        
-        with colf2:
-            all_monedas = st.checkbox("Todas las monedas", value=True)
-            f_moneda = st.multiselect("Filtrar Moneda de Pago", monedas, default=monedas if all_monedas else [])
-            if all_monedas:
-                f_moneda = monedas
-        
-        with colf3:
-            all_leyes = st.checkbox("Todas las leyes", value=True)
-            f_ley = st.multiselect("Filtrar Ley", leyes, default=leyes if all_leyes else [])
-            if all_leyes:
-                f_ley = leyes
-        
-        with colf4:
-            all_tickers = st.checkbox("Todos los tickers", value=True)
-            f_ticker = st.multiselect("Filtrar Ticker", tickers, default=tickers if all_tickers else [])
-            if all_tickers:
-                f_ticker = tickers
-        
-        # Aplicar filtros
-        mask = (
-            df_full["Emisor"].isin(f_emisor)
-            & df_full["Moneda de Pago"].isin(f_moneda)
-            & df_full["Ley"].isin(f_ley)
-            & df_full["Ticker"].isin(f_ticker)
-        )
-        df_filtered = df_full.loc[mask].reset_index(drop=True)
-        
-        # Mostrar DataFrame directo en Streamlit
-        st.dataframe(
-            df_filtered.style.format({
-                "Precio": "{:.1f}",
-                "TIR": "{:.1f}",
-                "TNA SA": "{:.1f}",
-                "Duration": "{:.1f}",
-                "Modified Duration": "{:.1f}",
-                "Convexidad": "{:.1f}",
-                "Paridad": "{:.1f}",
-                "Current Yield": "{:.1f}",
-            }),
-            width='stretch',
-            hide_index=True
-        )
-        
-        st.divider()
 
         # =========================
         # 2) SIMULADOR DE FLUJOS
