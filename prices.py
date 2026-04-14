@@ -3316,10 +3316,9 @@ def main():
         with col_fx3:
             mep_disp = f"{_fx_rates['MEP']:,.2f}" if pd.notna(_fx_rates.get("MEP")) else "N/D"
             ccl_disp = f"{_fx_rates['CCL']:,.2f}" if pd.notna(_fx_rates.get("CCL")) else "N/D"
-            st.markdown(
-                f"📡 &nbsp;MEP en vivo: **${mep_disp}** &nbsp;|&nbsp; CCL en vivo: **${ccl_disp}**",
-                unsafe_allow_html=True
-            )
+            cm1, cm2 = st.columns(2)
+            cm1.metric("MEP en vivo", f"${mep_disp}")
+            cm2.metric("CCL en vivo", f"${ccl_disp}")
 
         fx_used = fx_override
 
@@ -3364,7 +3363,7 @@ def main():
         df_ons_filt = df_ons.loc[mask_ons].reset_index(drop=True)
 
         # ── Tabla de métricas ──
-        st.subheader(f"Métricas de ONs — valuadas en {fx_mode} (TC: ${fx_used:,.2f})")
+        st.subheader("Panel Bonos en dólares")
 
         # Columnas visibles reducidas
         display_cols = [
