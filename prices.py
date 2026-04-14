@@ -1811,24 +1811,47 @@ def get_price_ars_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -
     raise KeyError(f"ARS price not found for {name}O")
 
 
-def get_change_pct_for_symbol(df_all: pd.DataFrame, name: str) -> float:
-    """Busca la variación porcentual del día. Los tickers ya tienen sufijo O (ej: GYC4O).
-    Devuelve np.nan si no está disponible."""
-    row = df_all.loc[df_all["symbol"] == name] if "symbol" in df_all.columns else pd.DataFrame()
-    if row.empty:
+
+def _lookup_row(df_all, ticker):
+    """Devuelve la fila del DataFrame para el ticker dado, o None."""
+    if df_all is None or df_all.empty or "symbol" not in df_all.columns:
+        return None
+    row = df_all.loc[df_all["symbol"] == ticker]
+    return row.iloc[0] if not row.empty else None
+
+
+def _d_ticker(name):
+    """Convierte ticker O a su equivalente D (ej: GYC4O -> GYC4D)."""
+    return name[:-1] + "D" if name.endswith("O") else name + "D"
+
+
+def get_change_pct_for_symbol(df_all, name):
+    """Variacion % del dia de la especie D (ej: GYC4D). Devuelve np.nan si no disponible."""
+    r = _lookup_row(df_all, _d_ticker(name))
+    if r is None:
         return np.nan
-    r = row.iloc[0]
-    # Intentar columnas habituales de variación
     for col in ("change_pct", "pct_change", "var_pct", "variacion", "change", "d_pct"):
-        if col in r and pd.notna(r[col]):
+        if col in r.index and pd.notna(r[col]):
             return float(r[col])
-    # Calcular desde close/prev_close si están disponibles
     for close_col, prev_col in (("close", "prev_close"), ("px_bid", "prev_bid"), ("last", "prev_last")):
-        if close_col in r and prev_col in r and pd.notna(r[close_col]) and pd.notna(r[prev_col]):
+        if close_col in r.index and prev_col in r.index and pd.notna(r[close_col]) and pd.notna(r[prev_col]):
             prev = float(r[prev_col])
             if prev != 0:
                 return (float(r[close_col]) / prev - 1) * 100
     return np.nan
+
+
+def get_volume_for_symbol(df_all, name):
+    """Volumen negociado de la especie O (ej: GYC4O). Devuelve np.nan si no disponible."""
+    r = _lookup_row(df_all, name)
+    if r is None:
+        return np.nan
+    for col in ("volume", "vol", "traded_volume", "nominal_vol", "q", "qty",
+                "trade_volume", "cantidad", "monto", "effective"):
+        if col in r.index and pd.notna(r[col]):
+            return float(r[col])
+    return np.nan
+
 
 
 def fetch_fx_rates(df_dolares: pd.DataFrame) -> dict:
@@ -2069,21 +2092,15 @@ def metrics_bcp(bonds: list, settlement: datetime | None = None) -> pd.DataFrame
 def metrics_ons(bonds: list, df_all: pd.DataFrame | None = None,
                 settlement: datetime | None = None) -> pd.DataFrame:
     """
-    Tabla de métricas para ONs con columnas específicas:
-    TIR, MD, Moneda de Pago, Paridad, Current Yield,
-    Próxima Fecha de Pago, Fecha de Vencimiento, Variación del día.
+    Tabla de metricas para ONs.
+    Columnas: Ticker, Emisor, Moneda de Pago, Precio (USD), TIR (%), MD,
+              Fecha de Vencimiento, Volumen D, Var. Dia D (%).
     """
     df_norm = normalize_market_df(df_all) if df_all is not None and not df_all.empty else None
     rows = []
     stl = settlement
     for b in bonds:
         # generate_payment_dates devuelve strings "%Y-%m-%d", no datetimes
-        try:
-            dates = b.generate_payment_dates(stl)
-            prox = (datetime.strptime(dates[1], "%Y-%m-%d").strftime("%d/%m/%Y")
-                    if len(dates) > 1 else None)
-        except Exception:
-            prox = None
         try:
             tir = b.xirr(stl)
         except Exception:
@@ -2092,38 +2109,28 @@ def metrics_ons(bonds: list, df_all: pd.DataFrame | None = None,
             md = b.modified_duration(stl)
         except Exception:
             md = np.nan
-        try:
-            par = b.parity(stl)
-        except Exception:
-            par = np.nan
-        try:
-            cy = b.current_yield(stl)
-        except Exception:
-            cy = np.nan
 
-        # Variación del día desde clase O
+        # Variacion % del dia y volumen de la especie D
         var_dia = np.nan
+        volumen = np.nan
         if df_norm is not None:
             var_dia = get_change_pct_for_symbol(df_norm, b.name)
+            volumen = get_volume_for_symbol(df_norm, b.name)
 
         rows.append({
-            "Ticker":                 b.name,
-            "Emisor":                 getattr(b, "emisor", ""),
-            "Moneda de Pago":         getattr(b, "curr", ""),
-            "Ley":                    getattr(b, "law", ""),
-            "Calificación":           getattr(b, "calificacion", ""),
-            "Precio (USD)":           round(float(b.price), 2) if pd.notna(b.price) else np.nan,
-            "TIR (%)":                round(float(tir), 2) if pd.notna(tir) else np.nan,
-            "MD":                     round(float(md), 2) if pd.notna(md) else np.nan,
-            "Paridad (%)":            round(float(par), 1) if pd.notna(par) else np.nan,
-            "Current Yield (%)":      round(float(cy), 2) if pd.notna(cy) else np.nan,
-            "Próxima Fecha de Pago":  prox,
-            "Fecha de Vencimiento":   b.end_date.strftime("%d/%m/%Y") if hasattr(b, "end_date") else None,
-            "Var. Día (%)":           round(float(var_dia), 2) if pd.notna(var_dia) else np.nan,
+            "Ticker":              b.name,
+            "Emisor":              getattr(b, "emisor", ""),
+            "Moneda de Pago":      getattr(b, "curr", ""),
+            "Precio (USD)":        round(float(b.price), 2) if pd.notna(b.price) else np.nan,
+            "TIR (%)":             round(float(tir), 2) if pd.notna(tir) else np.nan,
+            "MD":                  round(float(md), 2) if pd.notna(md) else np.nan,
+            "Fecha de Vencimiento": b.end_date.strftime("%d/%m/%Y") if hasattr(b, "end_date") else None,
+            "Volumen D":           volumen,
+            "Var. Dia D (%)":      round(float(var_dia), 2) if pd.notna(var_dia) else np.nan,
         })
 
     df = pd.DataFrame(rows)
-    for c in ["TIR (%)","MD","Paridad (%)","Current Yield (%)","Precio (USD)","Var. Día (%)"]:
+    for c in ["Precio (USD)", "TIR (%)", "MD", "Volumen D", "Var. Dia D (%)"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.reset_index(drop=True)
@@ -3372,41 +3379,39 @@ def main():
         # ── Tabla de métricas ──
         st.subheader(f"Métricas de ONs — valuadas en {fx_mode} (TC: ${fx_used:,.2f})")
 
-        # Columnas visibles (ocultar Emisor/Ley/Calif de la vista principal pero dejarlas filtrables)
+        # Columnas visibles reducidas
         display_cols = [
-            "Ticker", "Emisor", "Moneda de Pago", "Calificación", "Ley",
+            "Ticker", "Emisor", "Moneda de Pago",
             "Precio (USD)", "TIR (%)", "MD",
-            "Paridad (%)", "Current Yield (%)",
-            "Próxima Fecha de Pago", "Fecha de Vencimiento",
-            "Var. Día (%)",
+            "Fecha de Vencimiento", "Volumen D", "Var. Dia D (%)",
         ]
         df_display = df_ons_filt[[c for c in display_cols if c in df_ons_filt.columns]]
 
-        # Formateo condicional: verde/rojo para variación del día
+        # Formateo condicional: verde/rojo para variacion del dia
         def _color_var(val):
             if pd.isna(val): return ""
             return "color: #16a34a; font-weight:600" if val > 0 else ("color: #dc2626; font-weight:600" if val < 0 else "")
 
-        styled = df_display.style.format({
-            "Precio (USD)":       "{:.2f}",
-            "TIR (%)":            "{:.2f}%",
-            "MD":                 "{:.2f}",
-            "Paridad (%)":        "{:.1f}%",
-            "Current Yield (%)":  "{:.2f}%",
-            "Var. Día (%)":       lambda v: f"{v:+.2f}%" if pd.notna(v) else "—",
-        }, na_rep="—")
+        fmt = {
+            "Precio (USD)": "{:.2f}",
+            "TIR (%)":      "{:.2f}%",
+            "MD":           "{:.2f}",
+            "Volumen D":    lambda v: f"{v:,.0f}" if pd.notna(v) else "—",
+            "Var. Dia D (%)": lambda v: f"{v:+.2f}%" if pd.notna(v) else "—",
+        }
+        styled = df_display.style.format(fmt, na_rep="—")
 
-        if "Var. Día (%)" in df_display.columns:
+        if "Var. Dia D (%)" in df_display.columns:
             try:
-                styled = styled.map(_color_var, subset=["Var. Día (%)"])
+                styled = styled.map(_color_var, subset=["Var. Dia D (%)"])
             except AttributeError:
-                styled = styled.applymap(_color_var, subset=["Var. Día (%)"])
+                styled = styled.applymap(_color_var, subset=["Var. Dia D (%)"])
 
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
         st.caption(
-            f"💡 Precio en USD = Precio ARS clase **[ticker]O** ÷ TC {fx_mode} ({fx_used:,.2f}). "
-            "Si no hay precio de clase O disponible, se usa la clase D o el precio directo."
+            f"💡 Precio (USD) = Precio ARS clase O ÷ TC {fx_mode} ({fx_used:,.2f}). "
+            "Volumen y variacion corresponden a la especie D (USD)."
         )
 
         st.divider()
@@ -3422,7 +3427,7 @@ def main():
                 x="MD", y="TIR (%)",
                 color="Moneda de Pago",
                 text="Ticker",
-                hover_data=["Emisor", "Precio (USD)", "Paridad (%)", "Fecha de Vencimiento"],
+                hover_data=["Emisor", "Precio (USD)", "Fecha de Vencimiento", "Volumen D"],
                 title=f"Curva ONs — TIR (%) vs MD  [TC {fx_mode}: {fx_used:,.2f}]",
             )
             fig_ons.update_traces(textposition="top center")
