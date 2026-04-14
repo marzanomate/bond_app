@@ -2125,12 +2125,12 @@ def metrics_ons(bonds: list, df_all: pd.DataFrame | None = None,
             "TIR (%)":             round(float(tir), 2) if pd.notna(tir) else np.nan,
             "MD":                  round(float(md), 2) if pd.notna(md) else np.nan,
             "Fecha de Vencimiento": b.end_date.strftime("%d/%m/%Y") if hasattr(b, "end_date") else None,
-            "Volumen D":           volumen,
+            "Volumen":           volumen,
             "Var. Dia D (%)":      round(float(var_dia), 2) if pd.notna(var_dia) else np.nan,
         })
 
     df = pd.DataFrame(rows)
-    for c in ["Precio (USD)", "TIR (%)", "MD", "Volumen D", "Var. Dia D (%)"]:
+    for c in ["Precio (USD)", "TIR (%)", "MD", "Volumen", "Var. Dia D (%)"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.reset_index(drop=True)
@@ -3367,7 +3367,7 @@ def main():
         display_cols = [
             "Ticker", "Emisor", "Moneda de Pago",
             "Precio (USD)", "TIR (%)", "MD",
-            "Fecha de Vencimiento", "Volumen D", "Var. Dia D (%)",
+            "Fecha de Vencimiento", "Volumen", "Var. Dia D (%)",
         ]
         df_display = df_ons_filt[[c for c in display_cols if c in df_ons_filt.columns]]
 
@@ -3380,7 +3380,7 @@ def main():
             "Precio (USD)": "{:.2f}",
             "TIR (%)":      "{:.2f}%",
             "MD":           "{:.2f}",
-            "Volumen D":    lambda v: f"{v:,.0f}" if pd.notna(v) else "—",
+            "Volumen":    lambda v: f"{v:,.0f}" if pd.notna(v) else "—",
             "Var. Dia D (%)": lambda v: f"{v:+.2f}%" if pd.notna(v) else "—",
         }
         styled = df_display.style.format(fmt, na_rep="—")
@@ -3411,7 +3411,7 @@ def main():
                 x="MD", y="TIR (%)",
                 color="Moneda de Pago",
                 text="Ticker",
-                hover_data=["Emisor", "Precio (USD)", "Fecha de Vencimiento", "Volumen D"],
+                hover_data=["Emisor", "Precio (USD)", "Fecha de Vencimiento", "Volumen"],
                 title=f"Curva ONs — TIR (%) vs MD  [TC {fx_mode}: {fx_used:,.2f}]",
             )
             fig_ons.update_traces(textposition="top center")
