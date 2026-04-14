@@ -3389,7 +3389,10 @@ def main():
         }, na_rep="—")
 
         if "Var. Día (%)" in df_display.columns:
-            styled = styled.applymap(_color_var, subset=["Var. Día (%)"])
+            try:
+                styled = styled.map(_color_var, subset=["Var. Día (%)"])
+            except AttributeError:
+                styled = styled.applymap(_color_var, subset=["Var. Día (%)"])
 
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
