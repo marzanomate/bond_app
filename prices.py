@@ -3316,7 +3316,10 @@ def main():
         with col_fx3:
             mep_disp = f"{_fx_rates['MEP']:,.2f}" if pd.notna(_fx_rates.get("MEP")) else "N/D"
             ccl_disp = f"{_fx_rates['CCL']:,.2f}" if pd.notna(_fx_rates.get("CCL")) else "N/D"
-            st.info(f"📡 MEP en vivo: **${mep_disp}** &nbsp;|&nbsp; CCL en vivo: **${ccl_disp}**", icon=None)
+            st.markdown(
+                f"📡 &nbsp;MEP en vivo: **${mep_disp}** &nbsp;|&nbsp; CCL en vivo: **${ccl_disp}**",
+                unsafe_allow_html=True
+            )
 
         fx_used = fx_override
 
@@ -3397,95 +3400,6 @@ def main():
             f"💡 Precio (USD) = Precio ARS clase O ÷ TC {fx_mode} ({fx_used:,.2f}). "
             "Volumen y variacion corresponden a la especie D (USD)."
         )
-
-        st.divider()
-
-        # ── Curva TIR vs MD ──
-        st.subheader("Curva TIR vs MD")
-        df_curve = df_ons_filt.dropna(subset=["MD", "TIR (%)"])
-        if df_curve.empty:
-            st.info("Sin datos suficientes para graficar la curva.")
-        else:
-            fig_ons = px.scatter(
-                df_curve.sort_values("MD"),
-                x="MD", y="TIR (%)",
-                color="Moneda de Pago",
-                text="Ticker",
-                hover_data=["Emisor", "Precio (USD)", "Fecha de Vencimiento", "Volumen"],
-                title=f"Curva ONs — TIR (%) vs MD  [TC {fx_mode}: {fx_used:,.2f}]",
-            )
-            fig_ons.update_traces(textposition="top center")
-            fig_ons.update_layout(
-                xaxis_title="Modified Duration (años)",
-                yaxis_title="TIR (%)",
-                legend_title="Moneda de Pago",
-                margin=dict(l=10, r=10, t=60, b=10),
-            )
-            fig_ons.update_yaxes(ticksuffix="%")
-
-            if len(df_curve) >= 2 and df_curve["MD"].nunique() >= 2:
-                xv = df_curve["MD"].to_numpy(dtype=float)
-                yv = df_curve["TIR (%)"].to_numpy(dtype=float)
-                valid = (xv > 0) & np.isfinite(xv) & np.isfinite(yv)
-                if valid.sum() >= 2:
-                    xv, yv = xv[valid], yv[valid]
-                    m, c = np.polyfit(np.log(xv), yv, 1)
-                    xl = np.linspace(xv.min(), xv.max(), 200)
-                    yl = m * np.log(xl) + c
-                    ss_res = np.sum((yv - (m * np.log(xv) + c)) ** 2)
-                    ss_tot = np.sum((yv - yv.mean()) ** 2)
-                    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-                    fig_ons.add_trace(go.Scatter(x=xl, y=yl, mode="lines",
-                                                  name="Ajuste log", hoverinfo="skip"))
-                    fig_ons.add_annotation(
-                        text=f"y = {c:.2f} + {m:.2f}·ln(MD)   R²={r2:.3f}",
-                        xref="paper", x=0.99, yref="paper", y=0.02,
-                        showarrow=False, xanchor="right", yanchor="bottom",
-                        font=dict(size=10)
-                    )
-            st.plotly_chart(fig_ons, use_container_width=True)
-
-        st.divider()
-
-        # ── Calculadora individual ──
-        st.subheader("Calculadora de ON individual")
-        ons_map = {b.name: b for b in ons_list}
-        calc_cols = st.columns([1, 1, 1])
-        with calc_cols[0]:
-            sel_on = st.selectbox("ON", sorted(ons_map.keys()), key="ons_calc_sel")
-        with calc_cols[1]:
-            precio_manual_on = st.number_input(
-                "Precio manual USD (0 = usar mercado)", min_value=0.0, step=0.1,
-                value=0.0, key="ons_calc_px"
-            )
-        with calc_cols[2]:
-            st.write("")
-            st.write("")
-            calcular_on = st.button("Calcular", key="ons_calc_btn")
-
-        if calcular_on and sel_on:
-            b_on = ons_map[sel_on]
-            px_on = precio_manual_on if precio_manual_on > 0 else b_on.price
-            b_clone = clone_with_price(b_on, px_on) if px_on and pd.notna(px_on) else b_on
-            try:
-                dates_on = b_clone.generate_payment_dates()
-                prox_on = dates_on[1].strftime("%d/%m/%Y") if len(dates_on) > 1 else "—"
-                row_on = {
-                    "Ticker":                b_clone.name,
-                    "Emisor":                getattr(b_clone, "emisor", ""),
-                    "Moneda de Pago":        getattr(b_clone, "curr", ""),
-                    "Ley":                   getattr(b_clone, "law", ""),
-                    "Precio (USD)":          round(float(b_clone.price), 2),
-                    "TIR (%)":               round(float(b_clone.xirr()), 2),
-                    "MD":                    round(float(b_clone.modified_duration()), 2),
-                    "Paridad (%)":           round(float(b_clone.parity()), 1),
-                    "Current Yield (%)":     round(float(b_clone.current_yield()), 2),
-                    "Próxima Fecha de Pago": prox_on,
-                    "Fecha de Vencimiento":  b_clone.end_date.strftime("%d/%m/%Y"),
-                }
-                st.dataframe(pd.DataFrame([row_on]), hide_index=True, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error al calcular métricas: {e}")
 
         # =========================
         # 2) SIMULADOR DE FLUJOS
