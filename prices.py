@@ -3480,7 +3480,7 @@ def main():
             st.warning("No hay ONs disponibles.")
             return
 
-        df_ons = metrics_ons(ons_list, df_all=df_all_norm)
+        df_ons = metrics_ons(ons_list + manual_bonds, df_all=df_all_norm)
 
         # ── Filtros ──
         st.subheader("Filtros")
