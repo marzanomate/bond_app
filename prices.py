@@ -1846,7 +1846,7 @@ def get_volume_for_symbol(df_all, name):
     r = _lookup_row(df_all, name)
     if r is None:
         return np.nan
-    for col in ("volume", "vol", "traded_volume", "nominal_vol", "q", "qty",
+    for col in ("v", "volume", "vol", "traded_volume", "nominal_vol", "q", "qty",
                 "trade_volume", "cantidad", "monto", "effective"):
         if col in r.index and pd.notna(r[col]):
             return float(r[col])
