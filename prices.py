@@ -889,6 +889,33 @@ class bond_calculator_pro:
         finally:
             self.price = old
 
+
+# --------------------------------------------------------
+# bond_exact_schedule — calendar explícito de cupones
+# --------------------------------------------------------
+class bond_exact_schedule(bond_calculator_pro):
+    """
+    Igual que bond_calculator_pro pero acepta fechas de cupón explícitas
+    en lugar de generarlas hacia atrás. Útil para bonos con calendarios
+    fin-de-mes ajustados (ej: AO27, AO28).
+    """
+    def __init__(self, *args, coupon_dates_explicit: list, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._explicit_dates = sorted([
+            d if isinstance(d, datetime) else datetime.strptime(d, "%Y-%m-%d")
+            for d in coupon_dates_explicit
+        ])
+
+    def _schedule_backwards(self, settlement=None):
+        key = ("sched", (settlement or 0))
+        if key in self._cache:
+            return self._cache[key]
+        stl = self._settlement(settlement)
+        future = [d for d in self._explicit_dates if d > stl]
+        out = [stl] + future
+        self._cache[key] = out
+        return out
+
 # --------------------------------------------------------
 # LECAPs/BONCAPS
 # --------------------------------------------------------
@@ -2642,10 +2669,23 @@ def build_dlk_metrics(rows, df_all, fx_value = 1430, today=None):
 # =========================
 
 @st.cache_resource(show_spinner=False)
-def manual_bonds_factory(df_all):
-    def px(sym): 
-        try: return get_price_for_symbol(df_all, sym, prefer="px_bid")
+def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
+    _mep = float(mep_rate) if mep_rate and mep_rate > 0 else 1.0
+    _ccl = float(ccl_rate) if ccl_rate and ccl_rate > 0 else 1.0
+
+    def px(sym, prefer="px_bid"):
+        try: return get_price_for_symbol(df_all, sym, prefer=prefer)
         except: return np.nan
+
+    def px_mep(sym, prefer="px_ask"):
+        """Precio ARS clase O dividido MEP -> USD"""
+        p = px(sym, prefer)
+        return p / _mep if pd.notna(p) else np.nan
+
+    def px_ccl(sym, prefer="px_ask"):
+        """Precio ARS clase O dividido CCL -> USD"""
+        p = px(sym, prefer)
+        return p / _ccl if pd.notna(p) else np.nan
 
     # --- Ojo: si querés ajustar calificaciones, editá acá ---
     gd_29 = bond_calculator_pro(
@@ -3072,9 +3112,114 @@ def manual_bonds_factory(df_all):
             calificacion = "CCC-")
 
 
+
+    # ── BCRA serie 8 ──────────────────────────────────────────────
+    bpa8d = bond_calculator_pro(
+        name="BPA8", emisor="BCRA", curr="MEP", law="ARG",
+        start_date=datetime(2025,6,25), end_date=datetime(2028,4,30),
+        payment_frequency=6,
+        amortization_dates=["2028-04-30"], amortizations=[100],
+        rate=3, price=px_mep("BPOA8"),
+        step_up_dates=[], step_up=[], outstanding=6921, calificacion="CCC-")
+
+    bpb8d = bond_calculator_pro(
+        name="BPB8", emisor="BCRA", curr="MEP", law="ARG",
+        start_date=datetime(2025,6,25), end_date=datetime(2028,10,31),
+        payment_frequency=6,
+        amortization_dates=["2028-10-31"], amortizations=[100],
+        rate=3, price=px_mep("BPOB8"),
+        step_up_dates=[], step_up=[], outstanding=6921, calificacion="CCC-")
+
+    # ── Salta ─────────────────────────────────────────────────────
+    s24dd = bond_calculator_pro(
+        name="SA24D", emisor="Salta", curr="CCL", law="NY",
+        start_date=datetime(2021,2,24), end_date=datetime(2027,12,1),
+        payment_frequency=6,
+        amortization_dates=["2023-06-01","2023-12-01","2024-06-01","2024-12-01",
+                            "2025-06-01","2025-12-01","2026-06-01","2026-12-01",
+                            "2027-06-01","2027-12-01"],
+        amortizations=[5.0,5.0,7.5,7.5,12.5,12.5,12.5,12.5,12.5,12.5],
+        rate=0.04, price=px_mep("SA24D"),
+        step_up_dates=["2021-02-24","2021-06-01","2022-06-01"],
+        step_up=[0.04,0.05,0.085],
+        outstanding=357, calificacion="CCC-")
+
+    # ── Neuquén ───────────────────────────────────────────────────
+    ndt5d = bond_calculator_pro(
+        name="NDT5D", emisor="Neuquén", curr="CCL", law="NY",
+        start_date=datetime(2020,11,27), end_date=datetime(2030,4,27),
+        payment_frequency=6,
+        amortization_dates=["2024-04-27","2024-10-27","2025-04-27","2025-10-27",
+                            "2026-04-27","2026-10-27","2027-04-27","2027-10-27",
+                            "2028-04-27","2028-10-27","2029-04-27","2029-10-27","2030-04-27"],
+        amortizations=[100.0/13]*13,
+        rate=0.025, price=px_ccl("NDT25"),
+        step_up_dates=["2020-11-27","2021-10-27","2022-10-27","2023-10-27","2024-10-27"],
+        step_up=[0.025,0.04625,0.06625,0.0675,0.06875],
+        outstanding=377, calificacion="CCC-")
+
+    # ── Entre Ríos ────────────────────────────────────────────────
+    ef25d = bond_calculator_pro(
+        name="EF25D", emisor="Entre Ríos", curr="CCL", law="NY",
+        start_date=datetime(2021,2,8), end_date=datetime(2028,8,8),
+        payment_frequency=6,
+        amortization_dates=["2023-02-08","2023-08-08","2024-02-08","2024-08-08",
+                            "2025-02-08","2025-08-08","2026-02-08","2026-08-08",
+                            "2027-02-08","2027-08-08","2028-02-08","2028-08-08"],
+        amortizations=[5.0,5.0,9.0,9.0,9.0,9.0,9.0,9.0,9.0,9.0,9.0,9.0],
+        rate=0.05, price=px_mep("ERF25"),
+        step_up_dates=["2021-02-08","2022-08-08","2023-02-08","2023-08-08"],
+        step_up=[0.05,0.0575,0.081,0.0825],
+        outstanding=517, calificacion="CCC-")
+
+    em33d = bond_calculator_pro(
+        name="EM33D", emisor="Entre Ríos", curr="CCL", law="NY",
+        start_date=datetime(2026,3,4), end_date=datetime(2033,3,4),
+        payment_frequency=6,
+        amortization_dates=["2031-03-04","2032-03-04","2033-03-04"],
+        amortizations=[33.33,33.33,33.34],
+        rate=0.0956, price=px("EM33D", prefer="px_ask"),
+        step_up_dates=[], step_up=[],
+        outstanding=517, calificacion="CCC-")
+
+    # ── Tesoro AO (exact schedule) ────────────────────────────────
+    ao_27 = bond_exact_schedule(
+        name="AO27", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        start_date=datetime(2026,2,27), end_date=datetime(2027,10,29),
+        payment_frequency=1,
+        amortization_dates=["2027-10-29"], amortizations=[100],
+        rate=6, price=px_mep("AO27", prefer="px_bid"),
+        step_up_dates=[], step_up=[], outstanding=0, calificacion="CCC-",
+        coupon_dates_explicit=[
+            "2026-03-31","2026-04-30","2026-05-29","2026-06-30","2026-07-31",
+            "2026-08-31","2026-09-30","2026-10-30","2026-11-30","2026-12-30",
+            "2027-01-29","2027-02-26","2027-03-31","2027-04-30","2027-05-31",
+            "2027-06-30","2027-07-30","2027-08-31","2027-09-30","2027-10-29",
+        ])
+
+    ao_28 = bond_exact_schedule(
+        name="AO28", emisor="Tesoro Nacional", curr="USD", law="ARG",
+        start_date=datetime(2026,3,31), end_date=datetime(2028,10,31),
+        payment_frequency=1,
+        amortization_dates=["2028-10-31"], amortizations=[100],
+        rate=6, price=px_mep("AO28", prefer="px_bid"),
+        step_up_dates=[], step_up=[], outstanding=0, calificacion="CCC-",
+        coupon_dates_explicit=[
+            "2026-04-30","2026-05-29","2026-06-30","2026-07-31","2026-08-31",
+            "2026-09-30","2026-10-30","2026-11-30","2026-12-30","2027-01-29",
+            "2027-02-26","2027-03-31","2027-04-30","2027-05-31","2027-06-30",
+            "2027-07-30","2027-08-31","2027-09-30","2027-10-29","2027-11-30",
+            "2027-12-30","2028-01-31","2028-02-29","2028-03-31","2028-04-28",
+            "2028-05-31","2028-06-30","2028-07-31","2028-08-31","2028-09-29",
+            "2028-10-31",
+        ])
+
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
-            bpb7d, bpc7d, bpd7d, ba7dd, bb7dd, bc7dd, bpy6d, pm29d, sfd34, bdc33, co32d, an_29]
+            bpb7d, bpc7d, bpd7d, bpa8d, bpb8d,
+            ba7dd, bb7dd, bc7dd, bpy6d,
+            pm29d, sfd34, bdc33, co32d, an_29,
+            s24dd, ndt5d, ef25d, em33d, ao_27, ao_28]
 
 
 # =========================
@@ -3269,7 +3414,7 @@ def main():
     except Exception as e:
         st.warning(f"No se pudo cargar el listado de ONs: {e}")
         ons_bonds = []
-    manual_bonds = manual_bonds_factory(df_all)
+    manual_bonds = manual_bonds_factory(df_all, mep_rate=_fx_rates.get("MEP"), ccl_rate=_fx_rates.get("CCL"))
     all_bonds = ons_bonds + manual_bonds
     name_to_bond = {b.name: b for b in all_bonds}
 
