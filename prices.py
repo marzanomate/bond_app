@@ -1812,10 +1812,9 @@ def get_price_ars_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -
 
 
 def get_change_pct_for_symbol(df_all: pd.DataFrame, name: str) -> float:
-    """Busca la variación porcentual del día para el ticker O del símbolo.
+    """Busca la variación porcentual del día. Los tickers ya tienen sufijo O (ej: GYC4O).
     Devuelve np.nan si no está disponible."""
-    ticker_o = f"{name}O"
-    row = df_all.loc[df_all["symbol"] == ticker_o] if "symbol" in df_all.columns else pd.DataFrame()
+    row = df_all.loc[df_all["symbol"] == name] if "symbol" in df_all.columns else pd.DataFrame()
     if row.empty:
         return np.nan
     r = row.iloc[0]
@@ -1989,17 +1988,13 @@ def load_ons_from_excel(df_all: pd.DataFrame, fx_rate: float, adj: float = 1.005
 
         rate_pct = normalize_rate_to_percent(parse_float_cell(row["rate"]))
 
-        # --- Precio: primero intenta clase O (ARS / fx), luego clase D, luego directo ---
+        # --- Precio en USD: los tickers ya tienen sufijo O (ej: GYC4O).
+        #     Buscamos el precio ARS directamente y dividimos por fx_rate (MEP o CCL).
         price = np.nan
         if pd.notna(fx_rate) and fx_rate > 0:
             try:
-                price_ars = get_price_ars_for_symbol(df_norm, name, prefer=price_col_prefer)
-                price = (price_ars / fx_rate) * adj
-            except Exception:
-                pass
-        if np.isnan(price):
-            try:
-                price = get_price_for_symbol(df_norm, name, prefer=price_col_prefer) * adj
+                price_ars = get_price_for_symbol(df_norm, name, prefer=price_col_prefer)
+                price = price_ars / fx_rate
             except Exception:
                 price = np.nan
 
