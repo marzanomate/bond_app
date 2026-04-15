@@ -157,7 +157,8 @@ def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) 
 
 # === Carga y procesamiento TAMAR ===
 try:
-    df_tamar_raw = fetch_tamar_df(44)
+    _dkey_boot = daily_anchor_key()
+    df_tamar_raw = fetch_tamar_df(44, daily_key=_dkey_boot)
 except Exception as e:
     st.error(f"No se pudo obtener TAMAR del BCRA: {e}")
     df_tamar_raw = pd.DataFrame()
@@ -318,6 +319,7 @@ def _summarize_tamar_with_spread(objs):
 # --------------------------------------------------------
 
 
+@st.cache_data(show_spinner=False)
 def fetch_oficial_df(series_id: int = 5, daily_key: str = "") -> pd.DataFrame:
     base = "https://api.bcra.gob.ar/estadisticas"
     version = "v4.0"
@@ -392,7 +394,8 @@ def fetch_riesgo_pais(daily_key: str = "") -> dict:
     }
 
 # --- DolarAPI: todas las cotizaciones excepto "tarjeta" ---
-def fetch_dolares() -> pd.DataFrame:
+@st.cache_data(show_spinner=False)
+def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
     import urllib3
     url = "https://dolarapi.com/v1/dolares"
     s = _requests_session()  # tu helper de Session con retries si ya lo tenés
@@ -431,7 +434,11 @@ def fetch_dolares() -> pd.DataFrame:
     })
     return out.dropna(how="all", subset=["Compra", "Venta"])
 
-oficial_fx = float(fetch_dolares().loc[lambda d: d["Dólar"].astype(str).str.lower().eq("oficial"), "Venta"].iloc[-1])
+try:
+    _dkey0 = daily_anchor_key()
+    oficial_fx = float(fetch_dolares(_dkey0).loc[lambda d: d["Dólar"].astype(str).str.lower().eq("oficial"), "Venta"].iloc[-1])
+except Exception:
+    oficial_fx = np.nan
 
 # =========================
 # Clase bond_calculator_pro
@@ -2188,7 +2195,9 @@ def metrics_ons(bonds: list, df_all: pd.DataFrame | None = None,
     for c in ["Precio (USD)", "TIR (%)", "MD", "Volumen", "Var. Dia D (%)"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df.reset_index(drop=True)
+    # Eliminar bonos sin precio
+    df = df[df["Precio (USD)"].notna() & (df["Precio (USD)"] > 0)].reset_index(drop=True)
+    return df
 
 # ----------------------------------------------------------------
 # Construyo enviroment para LECAPs/Boncaps
@@ -3368,8 +3377,9 @@ def render_sidebar_info():
             unsafe_allow_html=True,
         )
         
-        rp = fetch_riesgo_pais()
-        fx = fetch_dolares()
+        _sk = daily_anchor_key()
+        rp = fetch_riesgo_pais(daily_key=_sk)
+        fx = fetch_dolares(daily_key=_sk)
         
         
         st.markdown("### Mercado")
@@ -3433,8 +3443,9 @@ def main():
     df_all_norm = normalize_market_df(df_all)
 
     # --- Tipos de cambio MEP y CCL desde dolarapi ---
+    _dkey_main = daily_anchor_key()
     try:
-        _fx_df = fetch_dolares()
+        _fx_df = fetch_dolares(daily_key=_dkey_main)
         _fx_rates = fetch_fx_rates(_fx_df)
     except Exception:
         _fx_rates = {"MEP": np.nan, "CCL": np.nan}
@@ -4023,7 +4034,8 @@ def main():
     
     elif page == "CER - DLK - TAMAR":        
         
-        dkey = daily_anchor_key(hour=12, minute=00, tz="America/Argentina/Buenos_Aires")
+        # Reutilizamos la daily_key ya calculada en main()
+        dkey = _dkey_main
         st.title("CER / TAMAR / DLK")
     
         # ---------- Datos base ----------
@@ -4043,14 +4055,12 @@ def main():
             st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
             cer_final = 100.0
     
-        # Oficial BCRA (serie 5) t-1
+        # TC Oficial BCRA serie 5 — último valor disponible (DLK pago final)
         try:
-            df_of = fetch_oficial_df(5,   daily_key=dkey)
-            t_minus_1 = (datetime.today() - timedelta(days=3)).date()
-            oficial_t1 = float(df_of.loc[df_of["fecha"].dt.date <= t_minus_1, "valor"].iloc[-1])
-
+            df_of = fetch_oficial_df(5, daily_key=dkey)
+            oficial_t1 = float(df_of["valor"].iloc[-1])
         except Exception as e:
-            st.warning(f"No se pudo leer Oficial (serie 5) t-1. Detalle: {e}")
+            st.warning(f"No se pudo leer TC Oficial (BCRA serie 5). Detalle: {e}")
             oficial_t1 = np.nan
     
         # ---------- CER Bonos (objetos) ----------
@@ -4182,7 +4192,8 @@ def main():
                 obj = dlk(
                     name=tk,
                     start_date=pd.to_datetime(emi, dayfirst=True).to_pydatetime(),
-                    end_date=vto_dt.to_pydatetime() if pd.notna(vto_dt) else None,  # <- protege NaT
+                    end_date=vto_dt.to_pydatetime() if pd.notna(vto_dt) else None,
+                    fx=float(oficial_t1) if np.isfinite(oficial_t1) else oficial_fx,
                     price=float(price) if np.isfinite(price) else np.nan,
                 )
                 dlk_objs.append(obj)
