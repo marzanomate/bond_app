@@ -223,7 +223,7 @@ else:
     tamar_avg_pct_na_tmg27  = float(tamar_window_tmg27.mean()) + 6
 
     # Último valor TAMAR disponible (en %)
-    tamar_hoy = float(data_tamar.loc[data_tamar.index <= today, "valor"].iloc[-1])
+    tamar_hoy = float(data_tamar["valor"].asof(today))
 
     def hybrid_tamar_tem(avg_tamar_na_pct, tamar_hoy_na_pct, start_date, end_date):
         """TEM % híbrida: promedio ponderado por días entre TAMAR histórico y actual."""
@@ -2349,23 +2349,19 @@ def build_lecaps_metrics(rows, df_all, today=None):
     return pd.DataFrame(out)[cols]
     
 @st.cache_resource(show_spinner=False)
-def build_lecaps_objects(rows, df_all_norm) -> dict[str, lecaps]:
+def build_lecaps_objects(rows, df_all_norm, price_adj: float = 1.005) -> dict[str, lecaps]:
     """
-    Crea objetos 'lecaps' a partir de LECAPS_ROWS y precios de mercado
-    usando ASK con fallback a BID, multiplicado por 1.005.
-    Retorna un dict: {ticker: lecaps_obj}
+    Crea objetos 'lecaps' a partir de rows y precios de mercado.
+    price_adj=1.005 para LECAPs/BONCAPs; price_adj=1.0 para TAMAR (sin ajuste).
     """
-    # armo un map rápido de {symbol: precio_ask/bid}
     px_df = df_all_norm.copy()
     if "symbol" not in px_df.columns:
-        # intentar normalizar por las dudas
         px_df = normalize_market_df(px_df)
 
-    # precio = ask con fallback en bid
     precio = px_df.get("px_ask", pd.Series(np.nan, index=px_df.index))
     if "px_bid" in px_df.columns:
         precio = precio.fillna(px_df["px_bid"])
-    px_map = dict(zip(px_df["symbol"].astype(str).str.upper(), (precio * 1.005).astype(float)))
+    px_map = dict(zip(px_df["symbol"].astype(str).str.upper(), (precio * price_adj).astype(float)))
 
     le_map = {}
     for (ticker, vto, emi, tem, tipo) in rows:
@@ -2870,7 +2866,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         outstanding=20501, calificacion="CCC-"
     )
     bpb7d = bond_calculator_pro(
-        name="BPBD7", emisor="BCRA", curr="MEP", law="ARG",
+        name="BPBD7", emisor="BCRA", curr="CCL/MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2026,4,30),
         payment_frequency=6,
         amortization_dates=["2026-04-30"], amortizations=[100],
@@ -2878,7 +2874,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
     bpc7d = bond_calculator_pro(
-        name="BPC7D", emisor="BCRA", curr="MEP", law="ARG",
+        name="BPC7D", emisor="BCRA", curr="CCL/MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2027,4,30),
         payment_frequency=6,
         amortization_dates=["2027-04-30"], amortizations=[100],
@@ -2886,7 +2882,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
     bpd7d = bond_calculator_pro(
-        name="BPD7D", emisor="BCRA", curr="MEP", law="ARG",
+        name="BPD7D", emisor="BCRA", curr="CCL/MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2027,10,30),
         payment_frequency=6,
         amortization_dates=["2027-04-30","2027-10-30"], amortizations=[50,50],
@@ -2894,7 +2890,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
     bpy6d = bond_calculator_pro(
-    name="BPY6D", emisor="BCRA", curr="MEP", law="ARG",
+    name="BPY6D", emisor="BCRA", curr="CCL/MEP", law="ARG",
     start_date=datetime(2024,9,4), end_date=datetime(2026,5,31),
     payment_frequency=3,
     amortization_dates=["2025-11-28","2026-02-28","2026-05-31"], amortizations=[33,33,34],
@@ -2906,7 +2902,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     # BA7DD
     # =========================
     ba7dd = bond_calculator_pro(
-        name="BA7DD", emisor="Provincia Buenos Aires", curr="CCL", law="NY",
+        name="BA7DD", emisor="Provincia Buenos Aires", curr="CCL/MEP", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
@@ -2941,7 +2937,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     # BB7DD
     # =========================
     bb7dd = bond_calculator_pro(
-        name="BB7DD", emisor="Provincia Buenos Aires", curr="CCL", law="NY",
+        name="BB7DD", emisor="Provincia Buenos Aires", curr="CCL/MEP", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
@@ -4246,7 +4242,7 @@ def main():
                 ("TTS26","15/9/2026" ,"29/01/2025", tamar_tem_tts26, "TAMAR"),
                 ("TTD26","15/12/2026","29/01/2025", tamar_tem_ttd26, "TAMAR"),
             ]
-            le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm)  # {ticker: lecaps}
+            le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm, price_adj=1.0)  # sin ajuste de precio para TAMAR
             tamar_objs = list(le_map_tamar.values())
         except Exception:
             tamar_objs = []
