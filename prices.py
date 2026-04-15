@@ -2875,7 +2875,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         outstanding=20501, calificacion="CCC-"
     )
     bpb7d = bond_calculator_pro(
-        name="BPBD7", emisor="BCRA", curr="CCL/MEP", law="ARG",
+        name="BPBD7", emisor="BCRA", curr="MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2026,4,30),
         payment_frequency=6,
         amortization_dates=["2026-04-30"], amortizations=[100],
@@ -2883,7 +2883,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
     bpc7d = bond_calculator_pro(
-        name="BPC7D", emisor="BCRA", curr="CCL/MEP", law="ARG",
+        name="BPC7D", emisor="BCRA", curr="MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2027,4,30),
         payment_frequency=6,
         amortization_dates=["2027-04-30"], amortizations=[100],
@@ -2891,7 +2891,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
     bpd7d = bond_calculator_pro(
-        name="BPD7D", emisor="BCRA", curr="CCL/MEP", law="ARG",
+        name="BPD7D", emisor="BCRA", curr="MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2027,10,30),
         payment_frequency=6,
         amortization_dates=["2027-04-30","2027-10-30"], amortizations=[50,50],
@@ -2899,7 +2899,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
     bpy6d = bond_calculator_pro(
-    name="BPY6D", emisor="BCRA", curr="CCL/MEP", law="ARG",
+    name="BPY6D", emisor="BCRA", curr="MEP", law="ARG",
     start_date=datetime(2024,9,4), end_date=datetime(2026,5,31),
     payment_frequency=3,
     amortization_dates=["2025-11-28","2026-02-28","2026-05-31"], amortizations=[33,33,34],
@@ -2911,7 +2911,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     # BA7DD
     # =========================
     ba7dd = bond_calculator_pro(
-        name="BA7DD", emisor="Provincia Buenos Aires", curr="CCL/MEP", law="NY",
+        name="BA7DD", emisor="Provincia Buenos Aires", curr="CCL", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
@@ -2946,7 +2946,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     # BB7DD
     # =========================
     bb7dd = bond_calculator_pro(
-        name="BB7DD", emisor="Provincia Buenos Aires", curr="CCL/MEP", law="NY",
+        name="BB7DD", emisor="Provincia Buenos Aires", curr="CCL", law="NY",
         start_date=datetime(2021,6,30), end_date=datetime(2037,9,1),
         payment_frequency=6,
         amortization_dates=[
