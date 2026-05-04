@@ -148,12 +148,40 @@ def fetch_tamar_df(series_id: int = 44, daily_key: str = "") -> pd.DataFrame:
     df = df.dropna(subset=["fecha","valor"]).sort_values("fecha").reset_index(drop=True)
     return df
 
-def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) -> pd.Timestamp:
+def bdays_before(
+    idx: pd.DatetimeIndex,
+    anchor: pd.Timestamp,
+    n: int = 10,
+) -> pd.Timestamp:
+    """
+    Devuelve el Timestamp del índice (idx) más cercano (≤) a la fecha
+    resultante de retroceder `n` días hábiles desde `anchor`,
+    usando el calendario QuantLib Argentina (Merval) con feriados.
+    n = 0 → último dato disponible <= anchor (equivale a "hoy" sin lag).
+    """
+    cal    = ql.Argentina(ql.Argentina.Merval)
     anchor = pd.Timestamp(anchor)
-    pos = idx.searchsorted(anchor, side="right") - 1
-    if pos < 0: pos = 0
-    pos_n = max(pos - n, 0)
-    return idx[pos_n]
+    ql_d   = ql.Date(anchor.day, anchor.month, anchor.year)
+
+    # Si anchor cae en feriado/fin de semana, retroceder al hábil anterior
+    if not cal.isBusinessDay(ql_d):
+        ql_d = cal.adjust(ql_d, ql.Preceding)
+
+    # Retroceder n días hábiles
+    count = 0
+    while count < n:
+        ql_d = ql_d - 1
+        if cal.isBusinessDay(ql_d):
+            count += 1
+
+    target = pd.Timestamp(
+        year=ql_d.year(), month=ql_d.month(), day=ql_d.dayOfMonth()
+    )
+
+    # Último dato del índice que sea <= target
+    pos = idx.searchsorted(target, side="right") - 1
+    pos = max(pos, 0)
+    return idx[pos]
 
 # === Carga y procesamiento TAMAR ===
 try:
@@ -193,19 +221,23 @@ else:
     abr17  = pd.Timestamp(year=2026, month=4,  day=17)
     abr30  = pd.Timestamp(year=2026, month=4,  day=30)
 
-    start        = rows_before_label(idx, jan29,  9)
-    start_m10n5  = rows_before_label(idx, ago18,  9)
-    start_m16e6  = rows_before_label(idx, ago18,  9)
-    start_m27f6  = rows_before_label(idx, ago29,  9)
-    start_m28n5  = rows_before_label(idx, ago19,  9)
-    start_m31g6  = rows_before_label(idx, nov10,  9)
-    start_m30a6  = rows_before_label(idx, nov28,  9)
-    start_tmf27  = rows_before_label(idx, feb13,  9)
-    start_tmg27  = rows_before_label(idx, mar31,  9)
-    start_tmf28  = rows_before_label(idx, abr17,  9)
-    start_tmg28  = rows_before_label(idx, abr30,  9)
-    start_txmj9  = rows_before_label(idx, abr30,  9)
-    end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
+    # Inicio de cada ventana: 10 días hábiles (calendario QuantLib Merval) antes
+    # de la fecha de emisión del instrumento → captura la TAMAR representativa
+    # del período de referencia del bono.
+    # end = n=0 → último dato disponible <= hoy (sin lag artificial).
+    start        = bdays_before(idx, jan29,  10)
+    start_m10n5  = bdays_before(idx, ago18,  10)
+    start_m16e6  = bdays_before(idx, ago18,  10)
+    start_m27f6  = bdays_before(idx, ago29,  10)
+    start_m28n5  = bdays_before(idx, ago19,  10)
+    start_m31g6  = bdays_before(idx, nov10,  10)
+    start_m30a6  = bdays_before(idx, nov28,  10)
+    start_tmf27  = bdays_before(idx, feb13,  10)
+    start_tmg27  = bdays_before(idx, mar31,  10)
+    start_tmf28  = bdays_before(idx, abr17,  10)
+    start_tmg28  = bdays_before(idx, abr30,  10)
+    start_txmj9  = bdays_before(idx, abr30,  10)
+    end          = bdays_before(idx, today,   0)
 
     tamar_window         = data_tamar.loc[start:end,       "valor"]
     tamar_window_m10n5   = data_tamar.loc[start_m10n5:end, "valor"]
@@ -3724,93 +3756,6 @@ def main():
                 )
             else:
                 st.info("Elegí al menos un bono.")
-        # =========================
-        # 4) Curvas comparadas por Emisor (TIR vs Modified Duration)
-        # =========================
-        st.subheader("Curvas comparadas por Emisor (TIR vs Modified Duration)")
-        
-        # Parto de las métricas ya calculadas (o recalculo por seguridad)
-        df_metrics = metrics_bcp(all_bonds).copy()
-        
-        # Emitores disponibles
-        emisores_all = sorted([e for e in df_metrics["Emisor"].dropna().unique()])
-        
-        colc1, colc2, colc3 = st.columns([1,1,2])
-        with colc1:
-            em1 = st.selectbox("Emisor A", emisores_all, index=0, key="curve_em1")
-        with colc2:
-            idx_default = 1 if len(emisores_all) > 1 else 0
-            em2 = st.selectbox("Emisor B", emisores_all, index=idx_default, key="curve_em2")
-        with colc3:
-            st.caption("Gráfico: eje X = Modified Duration | eje Y = TIR (e.a. %)")
-        
-        # Filtro por los dos emisores seleccionados
-        emisores_sel = [em1, em2] if em1 != em2 else [em1]
-        df_curves = df_metrics[df_metrics["Emisor"].isin(emisores_sel)].copy()
-        
-        # Asegurar numéricos y 1 decimal para la tabla
-        for c in ["TIR", "Modified Duration", "Precio", "TNA SA", "Convexidad", "Paridad", "Current Yield"]:
-            if c in df_curves.columns:
-                df_curves[c] = pd.to_numeric(df_curves[c], errors="coerce")
-        
-        # Scatter interactivo
-        if not df_curves.empty:
-            fig = px.scatter(
-                df_curves,
-                x="Modified Duration",
-                y="TIR",
-                color="Emisor",
-                symbol="Emisor",
-                hover_name="Ticker",
-                hover_data={
-                    "Emisor": True,
-                    "Ticker": False,
-                    "Ley": True,
-                    "Moneda de Pago": True,
-                    "Precio": ":.1f",
-                    "TIR": ":.1f",
-                    "TNA SA": ":.1f",
-                    "Modified Duration": ":.1f",
-                    "Convexidad": ":.1f",
-                    "Paridad": ":.1f",
-                    "Current Yield": ":.1f",
-                },
-                size_max=12,
-            )
-            fig.update_traces(marker=dict(size=12, line=dict(width=1)))
-            fig.update_layout(
-                xaxis_title="Modified Duration (años)",
-                yaxis_title="TIR (%)",
-                legend_title="Emisor",
-                height=480,
-                margin=dict(l=10, r=10, t=10, b=10),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-            # Tabla debajo (1 decimal, sin índice)
-            st.markdown("**Bonos incluidos en las curvas:**")
-            cols_show = [
-                "Ticker","Emisor","Ley","Moneda de Pago","Precio",
-                "TIR","TNA SA","Modified Duration","Convexidad","Paridad","Current Yield",
-                "Próxima Fecha de Pago","Fecha de Vencimiento"
-            ]
-            cols_show = [c for c in cols_show if c in df_curves.columns]
-            st.dataframe(
-                df_curves[cols_show].style.format({
-                    "Precio": "{:.1f}",
-                    "TIR": "{:.1f}",
-                    "TNA SA": "{:.1f}",
-                    "Modified Duration": "{:.1f}",
-                    "Convexidad": "{:.1f}",
-                    "Paridad": "{:.1f}",
-                    "Current Yield": "{:.1f}",
-                }),
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("No hay bonos para los emisores seleccionados.")
-
     elif page == "Lecaps - Boncaps":
         st.title("LECAPs / BONCAPs")
     
@@ -4056,16 +4001,14 @@ def main():
         # ---------- Datos base ----------
         df_all_norm = normalize_market_df(df_all)
     
-        # CER t-10 hábiles (calendario Argentina)
+        # CER: tomamos el valor publicado 10 días hábiles atrás (calendario QuantLib
+        # Argentina/Merval). Razón: el BCRA publica el CER con rezago, y la convención
+        # de mercado es usar el dato de t-10 hábiles como referencia de valuación.
         try:
             df_cer_series = fetch_cer_df(30, daily_key=dkey)
-            _today_d = date.today()
-            ar_holidays_cal = holidays.Argentina(years=[_today_d.year, _today_d.year - 1])
-            ar_holiday_list = [str(d) for d in ar_holidays_cal.keys()]
-            ar_calendar = np.busdaycalendar(holidays=ar_holiday_list)
-            fecha_10_dias = np.busday_offset(_today_d, -10, roll="preceding", busdaycal=ar_calendar)
-            target_cer = pd.Timestamp(fecha_10_dias).date()
-            cer_final = cer_at_or_before(df_cer_series, target_cer)
+            cer_idx       = pd.DatetimeIndex(df_cer_series["fecha"])
+            target_cer_ts = bdays_before(cer_idx, pd.Timestamp.today(), n=10)
+            cer_final     = cer_at_or_before(df_cer_series, target_cer_ts.date())
         except Exception as e:
             st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
             cer_final = 100.0
