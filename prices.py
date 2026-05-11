@@ -4606,6 +4606,7 @@ def main():
             ("X30S6", 715.7152, "2026-03-16", "2026-09-30", "S30S6", 2.53, "2026-03-16"),
             ("TZXO6", 480.2,    "2024-10-31", "2026-10-30", "S30O6", 2.55, "2025-10-31"),
             ("X30N6", 659.6789, "2025-12-15", "2026-11-30", "S30N6", 2.30, "2025-12-15"),
+            ("TZXY7", 659.6789, "2025-12-15", "2027-05-31", "T31Y7", 2.40, "2025-12-15"),
             ("TZX27", 200.4,    "2024-02-01", "2027-06-30", "T30J7", 2.58, "2026-01-16"),
         ]
 
@@ -4711,80 +4712,38 @@ def main():
 
         df_fischer_inf = pd.DataFrame(fischer_rows)
 
-        # ── Display ───────────────────────────────────────────────
-        tab_fischer, tab_pares = st.tabs(["📊 Fischer por mes", "📋 Detalle por par"])
-
-        with tab_fischer:
-            st.caption(
-                "Ratio CER_final[i+1] / CER_final[i] entre fixings consecutivos → "
-                "aísla el IPC del mes correspondiente (lag 2 meses). "
-                "N=1: mes puntual. N>1: media geométrica."
-            )
-
-            def _color_inf(v):
-                if pd.isna(v): return ""
-                return "color:#16a34a;font-weight:600" if v > 0 else "color:#dc2626;font-weight:600"
-
-            styled_f = (
-                df_fischer_inf.style
-                .format({
-                    "Var acum%":    "{:.2f}%",
-                    "Inf mensual%": "{:.2f}%",
-                    "Inf TNA%":     "{:.1f}%",
-                    "CER prev":     "{:.2f}",
-                    "CER curr":     "{:.2f}",
-                }, na_rep="—")
-                .map(_color_inf, subset=["Inf mensual%"])
-            )
-            st.dataframe(styled_f, use_container_width=True, hide_index=True)
-
-            # Gráfico
-            df_plot = df_fischer_inf[df_fischer_inf["Inf mensual%"].notna()].copy()
-            colors  = ["#1f77b4" if n == 1 else "#9467bd" for n in df_plot["N"]]
-            fig_inf = go.Figure()
-            fig_inf.add_trace(go.Bar(
-                x            = df_plot["IPC mes(es)"],
-                y            = df_plot["Inf mensual%"],
-                name         = "Inf mensual%",
-                marker_color = colors,
-                text         = df_plot["Inf mensual%"].map("{:.2f}%".format),
-                textposition = "outside",
-                customdata   = df_plot[["Segmento", "N", "Var acum%"]].values,
-                hovertemplate = (
-                    "%{x}<br>Segmento: %{customdata[0]}<br>"
-                    "N: %{customdata[1]}<br>Var acum: %{customdata[2]:.2f}%<br>"
-                    "Inf mensual: %{y:.2f}%<extra></extra>"
-                ),
-            ))
-            fig_inf.update_layout(
-                title    = "Inflación Mensual Implícita — Fischer CER vs Tasa Fija",
-                xaxis    = dict(title="Mes de IPC"),
-                yaxis    = dict(title="Inf mensual (%)", ticksuffix="%"),
-                template = "simple_white",
-                margin   = dict(l=10, r=10, t=60, b=10),
-                annotations = [dict(
-                    text      = "Azul = mes puntual (N=1)  |  Violeta = promedio N meses",
-                    xref="paper", yref="paper", x=0.01, y=-0.12,
-                    showarrow = False,
-                    font      = dict(size=10, color="gray"),
-                )],
-            )
-            st.plotly_chart(fig_inf, use_container_width=True)
-
-        with tab_pares:
-            st.caption("CER_final implícito y variación acumulada para cada par individualmente.")
-            disp_cols = ["Par", "Vencimiento", "Fixing CER", "P. CER", "P. Fija",
-                         "TEM%", "Pago Fija", "RD Fija", "CER Final Impl.",
-                         "Var Fwd CER%", "N períodos"]
-            st.dataframe(
-                df_calc_inf[disp_cols].style.format({
-                    "Var Fwd CER%":    "{:.2f}%",
-                    "RD Fija":         "{:.5f}",
-                    "CER Final Impl.": "{:.4f}",
-                    "Pago Fija":       "{:.4f}",
-                }, na_rep="—"),
-                use_container_width=True, hide_index=True,
-            )
+        # ── Gráfico ───────────────────────────────────────────────
+        df_plot = df_fischer_inf[df_fischer_inf["Inf mensual%"].notna()].copy()
+        colors  = ["#1f77b4" if n == 1 else "#9467bd" for n in df_plot["N"]]
+        fig_inf = go.Figure()
+        fig_inf.add_trace(go.Bar(
+            x            = df_plot["IPC mes(es)"],
+            y            = df_plot["Inf mensual%"],
+            name         = "Inf mensual%",
+            marker_color = colors,
+            text         = df_plot["Inf mensual%"].map("{:.2f}%".format),
+            textposition = "outside",
+            customdata   = df_plot[["Segmento", "N", "Var acum%"]].values,
+            hovertemplate = (
+                "%{x}<br>Segmento: %{customdata[0]}<br>"
+                "N: %{customdata[1]}<br>Var acum: %{customdata[2]:.2f}%<br>"
+                "Inf mensual: %{y:.2f}%<extra></extra>"
+            ),
+        ))
+        fig_inf.update_layout(
+            title    = "Inflación Mensual Implícita — Fischer CER vs Tasa Fija",
+            xaxis    = dict(title="Mes de IPC"),
+            yaxis    = dict(title="Inf mensual (%)", ticksuffix="%"),
+            template = "simple_white",
+            margin   = dict(l=10, r=10, t=60, b=40),
+            annotations = [dict(
+                text      = "Azul = mes puntual (N=1)  |  Violeta = promedio N meses",
+                xref="paper", yref="paper", x=0.01, y=-0.12,
+                showarrow = False,
+                font      = dict(size=10, color="gray"),
+            )],
+        )
+        st.plotly_chart(fig_inf, use_container_width=True)
 
 
 if __name__ == "__main__":
