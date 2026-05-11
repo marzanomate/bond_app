@@ -148,40 +148,12 @@ def fetch_tamar_df(series_id: int = 44, daily_key: str = "") -> pd.DataFrame:
     df = df.dropna(subset=["fecha","valor"]).sort_values("fecha").reset_index(drop=True)
     return df
 
-def bdays_before(
-    idx: pd.DatetimeIndex,
-    anchor: pd.Timestamp,
-    n: int = 10,
-) -> pd.Timestamp:
-    """
-    Devuelve el Timestamp del índice (idx) más cercano (≤) a la fecha
-    resultante de retroceder `n` días hábiles desde `anchor`,
-    usando el calendario QuantLib Argentina (Merval) con feriados.
-    n = 0 → último dato disponible <= anchor (equivale a "hoy" sin lag).
-    """
-    cal    = ql.Argentina(ql.Argentina.Merval)
+def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) -> pd.Timestamp:
     anchor = pd.Timestamp(anchor)
-    ql_d   = ql.Date(anchor.day, anchor.month, anchor.year)
-
-    # Si anchor cae en feriado/fin de semana, retroceder al hábil anterior
-    if not cal.isBusinessDay(ql_d):
-        ql_d = cal.adjust(ql_d, ql.Preceding)
-
-    # Retroceder n días hábiles
-    count = 0
-    while count < n:
-        ql_d = ql_d - 1
-        if cal.isBusinessDay(ql_d):
-            count += 1
-
-    target = pd.Timestamp(
-        year=ql_d.year(), month=ql_d.month(), day=ql_d.dayOfMonth()
-    )
-
-    # Último dato del índice que sea <= target
-    pos = idx.searchsorted(target, side="right") - 1
-    pos = max(pos, 0)
-    return idx[pos]
+    pos = idx.searchsorted(anchor, side="right") - 1
+    if pos < 0: pos = 0
+    pos_n = max(pos - n, 0)
+    return idx[pos_n]
 
 # === Carga y procesamiento TAMAR ===
 try:
@@ -190,6 +162,14 @@ try:
 except Exception as e:
     st.error(f"No se pudo obtener TAMAR del BCRA: {e}")
     df_tamar_raw = pd.DataFrame()
+
+# TAMAR Efectiva Anual (serie 45) — reutiliza fetch_tamar_df
+try:
+    df_tamar_ea_raw = fetch_tamar_df(45, daily_key=_dkey_boot)
+    tamar_ea_actual = float(df_tamar_ea_raw.iloc[-1]["valor"])
+except Exception:
+    df_tamar_ea_raw = pd.DataFrame()
+    tamar_ea_actual = np.nan
 
 if df_tamar_raw.empty:
     st.info("Sin datos TAMAR disponibles por ahora.")
@@ -221,23 +201,19 @@ else:
     abr17  = pd.Timestamp(year=2026, month=4,  day=17)
     abr30  = pd.Timestamp(year=2026, month=4,  day=30)
 
-    # Inicio de cada ventana: 10 días hábiles (calendario QuantLib Merval) antes
-    # de la fecha de emisión del instrumento → captura la TAMAR representativa
-    # del período de referencia del bono.
-    # end = n=0 → último dato disponible <= hoy (sin lag artificial).
-    start        = bdays_before(idx, jan29,  10)
-    start_m10n5  = bdays_before(idx, ago18,  10)
-    start_m16e6  = bdays_before(idx, ago18,  10)
-    start_m27f6  = bdays_before(idx, ago29,  10)
-    start_m28n5  = bdays_before(idx, ago19,  10)
-    start_m31g6  = bdays_before(idx, nov10,  10)
-    start_m30a6  = bdays_before(idx, nov28,  10)
-    start_tmf27  = bdays_before(idx, feb13,  10)
-    start_tmg27  = bdays_before(idx, mar31,  10)
-    start_tmf28  = bdays_before(idx, abr17,  10)
-    start_tmg28  = bdays_before(idx, abr30,  10)
-    start_txmj9  = bdays_before(idx, abr30,  10)
-    end          = bdays_before(idx, today,   0)
+    start        = rows_before_label(idx, jan29,  9)
+    start_m10n5  = rows_before_label(idx, ago18,  9)
+    start_m16e6  = rows_before_label(idx, ago18,  9)
+    start_m27f6  = rows_before_label(idx, ago29,  9)
+    start_m28n5  = rows_before_label(idx, ago19,  9)
+    start_m31g6  = rows_before_label(idx, nov10,  9)
+    start_m30a6  = rows_before_label(idx, nov28,  9)
+    start_tmf27  = rows_before_label(idx, feb13,  9)
+    start_tmg27  = rows_before_label(idx, mar31,  9)
+    start_tmf28  = rows_before_label(idx, abr17,  9)
+    start_tmg28  = rows_before_label(idx, abr30,  9)
+    start_txmj9  = rows_before_label(idx, abr30,  9)
+    end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
 
     tamar_window         = data_tamar.loc[start:end,       "valor"]
     tamar_window_m10n5   = data_tamar.loc[start_m10n5:end, "valor"]
@@ -350,13 +326,15 @@ def _summarize_tamar_with_spread(objs):
             "TNA30 (implícita)": round(tna30_imp, 2) if np.isfinite(tna30_imp) else np.nan,
             "TNA30 TAMAR ref.": ref_tna30,
             "Spread TNA30 (pp)": round(spread, 2) if np.isfinite(spread) else np.nan,
+            "Spread vs TAMAR EA (pp)": round(irr - tamar_ea_actual, 2) if np.isfinite(irr) and np.isfinite(tamar_ea_actual) else np.nan,
             "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
             "MD": round(md, 2) if np.isfinite(md) else np.nan,
             "Pago Final": _pago_final_from_obj(o),
             "Días al vencimiento": _dias_al_vto_from_obj(o),
         })
     cols = ["Ticker","Vencimiento","Precio","TIREA","TNA30 (implícita)",
-            "TNA30 TAMAR ref.","Spread TNA30 (pp)","Dur","MD","Pago Final","Días al vencimiento"]
+            "TNA30 TAMAR ref.","Spread TNA30 (pp)","Spread vs TAMAR EA (pp)",
+            "Dur","MD","Pago Final","Días al vencimiento"]
     return pd.DataFrame(rows, columns=cols)
 
 
@@ -3402,7 +3380,7 @@ LECAPS_ROWS = [
     ("T15E7","15/1/2027" ,"31/1/2025"  , 2.05 , "Fija"),
     ("T31Y7","31/5/2027" ,"15/12/2025" , 2.4  , "Fija"),
     ("T30A7","30/4/2027" ,"31/10/2025" , 2.55 , "Fija"),
-    ("T30J7","30/06/2027","16/01/2026" , 2.58 , "Fija"),
+    ("T30J7","30/07/2027","16/01/2026" , 2.58 , "Fija"),
 ]
 
 # --- helpers del sidebar (dejalos a nivel módulo, fuera de main) ---
@@ -3456,7 +3434,7 @@ def main():
     st.sidebar.title("Navegación")
     page = st.sidebar.radio(
         "Elegí sección",
-        ["Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR"],
+        ["Bonos HD", "Lecaps - Boncaps", "CER - DLK - TAMAR", "Inflación Implícita"],
         index=0
     )
 
@@ -3756,6 +3734,93 @@ def main():
                 )
             else:
                 st.info("Elegí al menos un bono.")
+        # =========================
+        # 4) Curvas comparadas por Emisor (TIR vs Modified Duration)
+        # =========================
+        st.subheader("Curvas comparadas por Emisor (TIR vs Modified Duration)")
+        
+        # Parto de las métricas ya calculadas (o recalculo por seguridad)
+        df_metrics = metrics_bcp(all_bonds).copy()
+        
+        # Emitores disponibles
+        emisores_all = sorted([e for e in df_metrics["Emisor"].dropna().unique()])
+        
+        colc1, colc2, colc3 = st.columns([1,1,2])
+        with colc1:
+            em1 = st.selectbox("Emisor A", emisores_all, index=0, key="curve_em1")
+        with colc2:
+            idx_default = 1 if len(emisores_all) > 1 else 0
+            em2 = st.selectbox("Emisor B", emisores_all, index=idx_default, key="curve_em2")
+        with colc3:
+            st.caption("Gráfico: eje X = Modified Duration | eje Y = TIR (e.a. %)")
+        
+        # Filtro por los dos emisores seleccionados
+        emisores_sel = [em1, em2] if em1 != em2 else [em1]
+        df_curves = df_metrics[df_metrics["Emisor"].isin(emisores_sel)].copy()
+        
+        # Asegurar numéricos y 1 decimal para la tabla
+        for c in ["TIR", "Modified Duration", "Precio", "TNA SA", "Convexidad", "Paridad", "Current Yield"]:
+            if c in df_curves.columns:
+                df_curves[c] = pd.to_numeric(df_curves[c], errors="coerce")
+        
+        # Scatter interactivo
+        if not df_curves.empty:
+            fig = px.scatter(
+                df_curves,
+                x="Modified Duration",
+                y="TIR",
+                color="Emisor",
+                symbol="Emisor",
+                hover_name="Ticker",
+                hover_data={
+                    "Emisor": True,
+                    "Ticker": False,
+                    "Ley": True,
+                    "Moneda de Pago": True,
+                    "Precio": ":.1f",
+                    "TIR": ":.1f",
+                    "TNA SA": ":.1f",
+                    "Modified Duration": ":.1f",
+                    "Convexidad": ":.1f",
+                    "Paridad": ":.1f",
+                    "Current Yield": ":.1f",
+                },
+                size_max=12,
+            )
+            fig.update_traces(marker=dict(size=12, line=dict(width=1)))
+            fig.update_layout(
+                xaxis_title="Modified Duration (años)",
+                yaxis_title="TIR (%)",
+                legend_title="Emisor",
+                height=480,
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+            # Tabla debajo (1 decimal, sin índice)
+            st.markdown("**Bonos incluidos en las curvas:**")
+            cols_show = [
+                "Ticker","Emisor","Ley","Moneda de Pago","Precio",
+                "TIR","TNA SA","Modified Duration","Convexidad","Paridad","Current Yield",
+                "Próxima Fecha de Pago","Fecha de Vencimiento"
+            ]
+            cols_show = [c for c in cols_show if c in df_curves.columns]
+            st.dataframe(
+                df_curves[cols_show].style.format({
+                    "Precio": "{:.1f}",
+                    "TIR": "{:.1f}",
+                    "TNA SA": "{:.1f}",
+                    "Modified Duration": "{:.1f}",
+                    "Convexidad": "{:.1f}",
+                    "Paridad": "{:.1f}",
+                    "Current Yield": "{:.1f}",
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No hay bonos para los emisores seleccionados.")
+
     elif page == "Lecaps - Boncaps":
         st.title("LECAPs / BONCAPs")
     
@@ -4001,14 +4066,16 @@ def main():
         # ---------- Datos base ----------
         df_all_norm = normalize_market_df(df_all)
     
-        # CER: tomamos el valor publicado 10 días hábiles atrás (calendario QuantLib
-        # Argentina/Merval). Razón: el BCRA publica el CER con rezago, y la convención
-        # de mercado es usar el dato de t-10 hábiles como referencia de valuación.
+        # CER t-10 hábiles (calendario Argentina)
         try:
             df_cer_series = fetch_cer_df(30, daily_key=dkey)
-            cer_idx       = pd.DatetimeIndex(df_cer_series["fecha"])
-            target_cer_ts = bdays_before(cer_idx, pd.Timestamp.today(), n=10)
-            cer_final     = cer_at_or_before(df_cer_series, target_cer_ts.date())
+            _today_d = date.today()
+            ar_holidays_cal = holidays.Argentina(years=[_today_d.year, _today_d.year - 1])
+            ar_holiday_list = [str(d) for d in ar_holidays_cal.keys()]
+            ar_calendar = np.busdaycalendar(holidays=ar_holiday_list)
+            fecha_10_dias = np.busday_offset(_today_d, -10, roll="preceding", busdaycal=ar_calendar)
+            target_cer = pd.Timestamp(fecha_10_dias).date()
+            cer_final = cer_at_or_before(df_cer_series, target_cer)
         except Exception as e:
             st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
             cer_final = 100.0
@@ -4239,20 +4306,23 @@ def main():
                     if col in r.index and pd.notna(r[col]): return float(r[col])
                 return np.nan
             df["Var. Día (%)"] = df["Ticker"].apply(_get_var)
-            # Solo columnas requeridas
-            keep = ["Ticker", "Vencimiento", "Precio", "TIR (%)", "MD", "Var. Día (%)"]
+            # Solo columnas requeridas (Spread vs TAMAR EA solo aparece en la tabla TAMAR)
+            keep = ["Ticker", "Vencimiento", "Precio", "TIR (%)", "MD",
+                    "Spread vs TAMAR EA (pp)", "Var. Día (%)"]
             df = df[[c for c in keep if c in df.columns]]
             # Estilo
             def _color(v):
                 if pd.isna(v): return ""
                 return "color:#16a34a;font-weight:600" if v > 0 else ("color:#dc2626;font-weight:600" if v < 0 else "")
             fmt = {"Precio": "{:.2f}", "TIR (%)": "{:.2f}%", "MD": "{:.2f}",
+                   "Spread vs TAMAR EA (pp)": lambda v: f"{v:+.2f} pp" if pd.notna(v) else "—",
                    "Var. Día (%)": lambda v: f"{v:+.2f}%" if pd.notna(v) else "—"}
             styled = df.style.format(fmt, na_rep="—")
+            color_cols = [c for c in ["Spread vs TAMAR EA (pp)", "Var. Día (%)"] if c in df.columns]
             try:
-                styled = styled.map(_color, subset=["Var. Día (%)"])
+                styled = styled.map(_color, subset=color_cols)
             except AttributeError:
-                styled = styled.applymap(_color, subset=["Var. Día (%)"])
+                styled = styled.applymap(_color, subset=color_cols)
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
         with tab_dlk:
@@ -4467,6 +4537,255 @@ def main():
         with tab_g_cer:
             df_all_plot = pd.concat([df_cer_letras_plot, df_cer_bonos_plot], ignore_index=True)
             _plot_curve(df_all_plot, "Curva CER — TIREA vs MD")
+
+
+    # ══════════════════════════════════════════════════════════════
+    # PÁGINA: INFLACIÓN IMPLÍCITA — CER vs Tasa Fija
+    # ══════════════════════════════════════════════════════════════
+    if page == "Inflación Implícita":
+        st.title("Inflación Implícita — CER vs Tasa Fija")
+        st.caption(
+            "Compara letras CER con letras tasa fija de mismo vencimiento. "
+            "Despeja el CER final implícito que iguala los rendimientos directos "
+            "y descompone la inflación mensual por mes de IPC (Fischer entre fixings consecutivos)."
+        )
+
+        # ── Helpers locales ────────────────────────────────────────
+        def _px_inf(tkr: str) -> float:
+            """Ask price desde df_all_norm (ya normalizado por normalize_market_df)."""
+            r = _lookup_row(df_all_norm, tkr)
+            if r is not None:
+                for c in ("px_ask", "ask"):
+                    if c in r.index and pd.notna(r[c]):
+                        return float(r[c])
+            return np.nan
+
+        def _fixing_inf(mat: date, n: int = 10) -> date:
+            """n días hábiles antes del vencimiento (calendario AR Merval)."""
+            cal = ql.Argentina(ql.Argentina.Merval)
+            qd  = ql.Date(mat.day, mat.month, mat.year)
+            count = 0
+            while count < n:
+                qd -= 1
+                if cal.isBusinessDay(qd):
+                    count += 1
+            return date(qd.year(), qd.month(), qd.dayOfMonth())
+
+        def _ultimo_16(d: date) -> date:
+            """Último día 16 ya incorporado en el CER del día d."""
+            if d.day >= 15:
+                return d.replace(day=16)
+            return (d.replace(day=1) - relativedelta(months=1)).replace(day=16)
+
+        def _ipc_meses_inf(fp: date, fc: date) -> list:
+            """
+            Meses de IPC (con lag de 2) en (fp, fc].
+            Usa _ultimo_16 en ambos extremos para manejar fixings
+            que caen antes del día 16 del mes (ej: 14-may, 15-jun).
+            """
+            primer = _ultimo_16(fp) + relativedelta(months=1)
+            ultimo = _ultimo_16(fc)
+            meses, d = [], primer
+            while d <= ultimo:
+                meses.append((d - relativedelta(months=2)).replace(day=1))
+                d += relativedelta(months=1)
+            return meses
+
+        def _meses_30_360_inf(start: date, end: date) -> float:
+            """Períodos mensuales en convención 30/360 Bond Basis (igual que clase letras)."""
+            dc = ql.Thirty360(ql.Thirty360.BondBasis)
+            return dc.dayCount(
+                ql.Date(start.day, start.month, start.year),
+                ql.Date(end.day,   end.month,   end.year),
+            ) / 30.0
+
+        # ── Pares (cer_ticker, cer_ini, cer_start, mat_cer, fija_ticker, tem_pct, fija_start) ──
+        PARES_INF = [
+            ("TZX26", 200.4,    "2024-02-01", "2026-06-30", "T30J6", 2.15, "2025-01-17"),
+            ("X31L6", 685.5506, "2026-01-30", "2026-07-31", "S31L6", 2.75, "2026-01-30"),
+            ("X30S6", 715.7152, "2026-03-16", "2026-09-30", "S30S6", 2.53, "2026-03-16"),
+            ("TZXO6", 480.2,    "2024-10-31", "2026-10-30", "S30O6", 2.55, "2025-10-31"),
+            ("X30N6", 659.6789, "2025-12-15", "2026-11-30", "S30N6", 2.30, "2025-12-15"),
+            ("TZXY7", 659.6789, "2025-12-15", "2027-05-31", "T31Y7", 2.40, "2025-12-15"),
+            ("TZX27", 200.4,    "2024-02-01", "2027-06-30", "T30J7", 2.58, "2026-01-16"),
+        ]
+
+        # ── CER actual ────────────────────────────────────────────
+        try:
+            df_cer_inf   = fetch_cer_df(30, daily_key=daily_anchor_key())
+            cer_act      = float(df_cer_inf.iloc[-1]["valor"])
+            cer_act_date = df_cer_inf.iloc[-1]["fecha"].date()
+        except Exception as e:
+            st.error(f"No se pudo obtener el CER: {e}")
+            st.stop()
+
+        st.info(
+            f"CER actual: **{cer_act:.4f}** "
+            f"({cer_act_date.strftime('%d/%m/%Y')})"
+        )
+
+        # ── Precios y advertencias ────────────────────────────────
+        all_tix  = sorted({t for p in PARES_INF for t in (p[0], p[4])})
+        missing  = [t for t in all_tix if not np.isfinite(_px_inf(t))]
+        if missing:
+            st.warning(f"Sin precio en data912: **{', '.join(missing)}**")
+
+        # ── Cálculo por par ───────────────────────────────────────
+        rows_calc = []
+        for cer_tk, cer_ini, _, mat_s, fija_tk, tem_pct, fija_start_s in PARES_INF:
+            p_cer  = _px_inf(cer_tk)
+            p_fija = _px_inf(fija_tk)
+            if not (np.isfinite(p_cer) and p_cer > 0 and np.isfinite(p_fija) and p_fija > 0):
+                continue
+
+            mat        = pd.to_datetime(mat_s).date()
+            fija_start = pd.to_datetime(fija_start_s).date()
+
+            # pago_fija = 100 * (1+TEM)^n   [n en 30/360, igual que clase letras]
+            n_m       = _meses_30_360_inf(fija_start, mat)
+            pago_fija = 100.0 * (1 + tem_pct / 100) ** n_m
+            rd_fija   = pago_fija / p_fija
+
+            # Despejar CER_final de: rd_fija = [100*(CER_final/cer_ini)] / p_cer
+            cer_final = cer_ini * (p_cer / 100.0) * rd_fija
+            fixing    = _fixing_inf(mat, 10)
+            n_per     = len(_ipc_meses_inf(cer_act_date, fixing))
+
+            rows_calc.append({
+                "Par":             f"{cer_tk}/{fija_tk}",
+                "Vencimiento":     mat.strftime("%d/%m/%Y"),
+                "Fixing CER":      fixing.strftime("%d/%m/%Y"),
+                "_fixing_obj":     fixing,
+                "_cer_final_raw":  cer_final,
+                "P. CER":          round(p_cer, 2),
+                "P. Fija":         round(p_fija, 2),
+                "TEM%":            round(tem_pct, 2),
+                "Pago Fija":       round(pago_fija, 4),
+                "RD Fija":         round(rd_fija, 5),
+                "CER Final Impl.": round(cer_final, 4),
+                "Var Fwd CER%":    round((cer_final / cer_act - 1) * 100, 2),
+                "N períodos":      n_per,
+            })
+
+        if not rows_calc:
+            st.error("Sin precios disponibles para calcular. Revisá data912.")
+            st.stop()
+
+        df_calc_inf = (
+            pd.DataFrame(rows_calc)
+            .sort_values("_fixing_obj")
+            .reset_index(drop=True)
+        )
+
+        # ── Fischer entre fixings consecutivos ────────────────────
+        anchors = [(cer_act, cer_act_date, "CER actual")] + [
+            (r["_cer_final_raw"], r["_fixing_obj"], r["Par"])
+            for _, r in df_calc_inf.iterrows()
+        ]
+
+        fischer_rows = []
+        for i in range(1, len(anchors)):
+            cer_prev, fix_prev, lbl_prev = anchors[i - 1]
+            cer_curr, fix_curr, lbl_curr = anchors[i]
+            meses = _ipc_meses_inf(fix_prev, fix_curr)
+            n = len(meses)
+            if n == 0:
+                continue
+            ratio       = cer_curr / cer_prev
+            inf_mensual = ratio ** (1 / n) - 1
+            ipc_label   = (
+                meses[0].strftime("%b-%y") if n == 1
+                else f"{meses[0].strftime('%b-%y')} → {meses[-1].strftime('%b-%y')} (avg {n}m)"
+            )
+            fischer_rows.append({
+                "Segmento":     f"{lbl_prev.split('/')[0]} → {lbl_curr.split('/')[0]}",
+                "Fixing prev":  fix_prev.strftime("%d/%m/%y"),
+                "Fixing curr":  fix_curr.strftime("%d/%m/%y"),
+                "IPC mes(es)":  ipc_label,
+                "N":            n,
+                "CER prev":     round(cer_prev, 2),
+                "CER curr":     round(cer_curr, 2),
+                "Var acum%":    round((ratio - 1) * 100, 2),
+                "Inf mensual%": round(inf_mensual * 100, 2),
+                "Inf TNA%":     round(((1 + inf_mensual) ** 12 - 1) * 100, 2),
+            })
+
+        df_fischer_inf = pd.DataFrame(fischer_rows)
+
+        # ── Display ───────────────────────────────────────────────
+        tab_fischer, tab_pares = st.tabs(["📊 Fischer por mes", "📋 Detalle por par"])
+
+        with tab_fischer:
+            st.caption(
+                "Ratio CER_final[i+1] / CER_final[i] entre fixings consecutivos → "
+                "aísla el IPC del mes correspondiente (lag 2 meses). "
+                "N=1: mes puntual. N>1: media geométrica."
+            )
+
+            def _color_inf(v):
+                if pd.isna(v): return ""
+                return "color:#16a34a;font-weight:600" if v > 0 else "color:#dc2626;font-weight:600"
+
+            styled_f = (
+                df_fischer_inf.style
+                .format({
+                    "Var acum%":    "{:.2f}%",
+                    "Inf mensual%": "{:.2f}%",
+                    "Inf TNA%":     "{:.1f}%",
+                    "CER prev":     "{:.2f}",
+                    "CER curr":     "{:.2f}",
+                }, na_rep="—")
+                .map(_color_inf, subset=["Inf mensual%"])
+            )
+            st.dataframe(styled_f, use_container_width=True, hide_index=True)
+
+            # Gráfico
+            df_plot = df_fischer_inf[df_fischer_inf["Inf mensual%"].notna()].copy()
+            colors  = ["#1f77b4" if n == 1 else "#9467bd" for n in df_plot["N"]]
+            fig_inf = go.Figure()
+            fig_inf.add_trace(go.Bar(
+                x            = df_plot["IPC mes(es)"],
+                y            = df_plot["Inf mensual%"],
+                name         = "Inf mensual%",
+                marker_color = colors,
+                text         = df_plot["Inf mensual%"].map("{:.2f}%".format),
+                textposition = "outside",
+                customdata   = df_plot[["Segmento", "N", "Var acum%"]].values,
+                hovertemplate = (
+                    "%{x}<br>Segmento: %{customdata[0]}<br>"
+                    "N: %{customdata[1]}<br>Var acum: %{customdata[2]:.2f}%<br>"
+                    "Inf mensual: %{y:.2f}%<extra></extra>"
+                ),
+            ))
+            fig_inf.update_layout(
+                title    = "Inflación Mensual Implícita — Fischer CER vs Tasa Fija",
+                xaxis    = dict(title="Mes de IPC"),
+                yaxis    = dict(title="Inf mensual (%)", ticksuffix="%"),
+                template = "simple_white",
+                margin   = dict(l=10, r=10, t=60, b=10),
+                annotations = [dict(
+                    text      = "Azul = mes puntual (N=1)  |  Violeta = promedio N meses",
+                    xref="paper", yref="paper", x=0.01, y=-0.12,
+                    showarrow = False,
+                    font      = dict(size=10, color="gray"),
+                )],
+            )
+            st.plotly_chart(fig_inf, use_container_width=True)
+
+        with tab_pares:
+            st.caption("CER_final implícito y variación acumulada para cada par individualmente.")
+            disp_cols = ["Par", "Vencimiento", "Fixing CER", "P. CER", "P. Fija",
+                         "TEM%", "Pago Fija", "RD Fija", "CER Final Impl.",
+                         "Var Fwd CER%", "N períodos"]
+            st.dataframe(
+                df_calc_inf[disp_cols].style.format({
+                    "Var Fwd CER%":    "{:.2f}%",
+                    "RD Fija":         "{:.5f}",
+                    "CER Final Impl.": "{:.4f}",
+                    "Pago Fija":       "{:.4f}",
+                }, na_rep="—"),
+                use_container_width=True, hide_index=True,
+            )
 
 
 if __name__ == "__main__":
