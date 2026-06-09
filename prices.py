@@ -200,6 +200,7 @@ else:
     mar31  = pd.Timestamp(year=2026, month=3,  day=31)
     abr17  = pd.Timestamp(year=2026, month=4,  day=17)
     abr30  = pd.Timestamp(year=2026, month=4,  day=30)
+    may15  = pd.Timestamp(year=2026, month=5,  day=15)
 
     start        = rows_before_label(idx, jan29,  9)
     start_m10n5  = rows_before_label(idx, ago18,  9)
@@ -213,6 +214,7 @@ else:
     start_tmf28  = rows_before_label(idx, abr17,  9)
     start_tmg28  = rows_before_label(idx, abr30,  9)
     start_txmj9  = rows_before_label(idx, abr30,  9)
+    start_txmj8  = rows_before_label(idx, may15,  10)
     end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
 
     tamar_window         = data_tamar.loc[start:end,       "valor"]
@@ -227,6 +229,7 @@ else:
     tamar_window_tmf28   = data_tamar.loc[start_tmf28:end, "valor"]
     tamar_window_tmg28   = data_tamar.loc[start_tmg28:end, "valor"]
     tamar_window_txmj9   = data_tamar.loc[start_txmj9:end, "valor"]
+    tamar_window_txmj8   = data_tamar.loc[start_txmj8:end, "valor"]
 
     # Promedios en % TNA + spreads en pp
     tamar_avg_pct_na        = float(tamar_window.mean())
@@ -241,6 +244,7 @@ else:
     tamar_avg_pct_na_tmf28 = tamar_window_tmf28.mean() + 6.5
     tamar_avg_pct_na_tmg28 = tamar_window_tmg28.mean() + 6.9
     tamar_avg_pct_na_txmj9 = tamar_window_txmj9.mean() + 3
+    tamar_avg_pct_na_txmj8 = tamar_window_txmj8.mean() + 3
 
     # Último valor TAMAR disponible (en %)
     tamar_hoy = float(data_tamar["valor"].asof(today))
@@ -264,6 +268,7 @@ else:
     tamar_tem_tmf28 = hybrid_tamar_tem(tamar_avg_pct_na_tmf28, tamar_hoy + 6.5, datetime(2026, 4,17), datetime(2028, 2,25))
     tamar_tem_tmg28 = hybrid_tamar_tem(tamar_avg_pct_na_tmg28, tamar_hoy + 6.9, datetime(2026, 4,30), datetime(2028, 8,31))
     tamar_tem_txmj9 = hybrid_tamar_tem(tamar_avg_pct_na_txmj9, tamar_hoy + 3,   datetime(2026, 4,30), datetime(2029, 6,29))
+    tamar_tem_txmj8 = hybrid_tamar_tem(tamar_avg_pct_na_txmj8, tamar_hoy + 3,   datetime(2026, 5,15), datetime(2028, 6,30))
     tamar_tem_ttj26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026, 6,30))
     tamar_tem_tts26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026, 9,15))
     tamar_tem_ttd26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026,12,15))
@@ -281,6 +286,8 @@ def _tamar_ref_tna30_pct(ticker: str) -> float:
         "TTJ26": tamar_tem_ttj26,
         "TTS26": tamar_tem_tts26,
         "TTD26": tamar_tem_ttd26,
+        "TXMJ8": tamar_tem_txmj8,
+        "TXMJ9": tamar_tem_txmj9,
     }
     tem_ref = base.get(ticker, tamar_tem)
     return round(tem_ref * 12.0, 2)   # TEM% * 12 = TNA30 %
@@ -4159,6 +4166,7 @@ def main():
             ("TZX28", "30/6/2028" , "1/2/2024"  , 200.4   , "CER"),
             ("TZXS8", "29/9/2028" , "31/3/2026" , 725.8754, "CER"),
             ("TXMJ9", "29/6/2029" , "30/4/2026" , 747.2132, "CER"),
+            ("TXMJ8", "30/6/2028" , "15/5/2026"  , 758.1179, "CER"),
         ]
         cer_letras_objs = []
         for tk, vto, emi, cer_ini, _ in cer_rows:
@@ -4284,6 +4292,7 @@ def main():
                 ("TMF28","25/2/2028" ,"17/4/2026" , tamar_tem_tmf28, "TAMAR"),
                 ("TMG28","31/8/2028" ,"30/4/2026" , tamar_tem_tmg28, "TAMAR"),
                 ("TXMJ9","29/6/2029" ,"30/4/2026" , tamar_tem_txmj9, "TAMAR"),
+                ("TXMJ8","30/6/2028" ,"15/5/2026" , tamar_tem_txmj8, "TAMAR"),
             ]
             le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm, price_adj=1.0)  # sin ajuste de precio para TAMAR
             tamar_objs = list(le_map_tamar.values())
