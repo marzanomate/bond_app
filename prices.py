@@ -316,6 +316,10 @@ else:
     tamar_tem_ttj26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026, 6,30))
     tamar_tem_tts26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026, 9,15))
     tamar_tem_ttd26 = hybrid_tamar_tem(tamar_avg_pct_na,       tamar_hoy + 0,   datetime(2025, 1,29), datetime(2026,12,15))
+    tamar_tem_txmd8 = hybrid_tamar_tem(tamar_avg_pct_na_txmd8, tamar_hoy + 3,   datetime(2026, 6,12), datetime(2028,12,15))
+    tamar_tem_txmd9 = hybrid_tamar_tem(tamar_avg_pct_na_txmd9, tamar_hoy + 3,   datetime(2026, 6,12), datetime(2029,12,14))
+    tamar_tem_txmj0 = hybrid_tamar_tem(tamar_avg_pct_na_txmj0, tamar_hoy + 3,   datetime(2026, 6,12), datetime(2030,6,28))
+    tamar_tem_tml27 = hybrid_tamar_tem(tamar_avg_pct_na_tml27, tamar_hoy + 5.4, datetime(2026, 6,30), datetime(2027,7,30))
     # compatibilidad con referencias existentes
     tamar_tem = tamar_tem_ttj26
 
@@ -324,14 +328,17 @@ def _tamar_ref_tna30_pct(ticker: str) -> float:
     # TEM en % mensual -> TNA30 % = TEM * 12
     base = {
         "M31G6": tamar_tem_m31g6,
-        "M30A6": tamar_tem_m30a6,
         "TMF27": tamar_tem_tmf27,
         "TMG27": tamar_tem_tmg27,
-        "TTJ26": tamar_tem_ttj26,
+        "TMF28": tamar_tem_tmf28,
         "TTS26": tamar_tem_tts26,
         "TTD26": tamar_tem_ttd26,
         "TXMJ8": tamar_tem_txmj8,
         "TXMJ9": tamar_tem_txmj9,
+        "TXMD9": tamar_tem_txmd9,
+        "TML27": tamar_tem_tml27,
+        "TXMJ0": tamar_tem_txmj0,
+        "TMG28": tamar_tem_tmg28,
     }
     tem_ref = base.get(ticker, tamar_tem)
     return round(tem_ref * 12.0, 2)   # TEM% * 12 = TNA30 %
@@ -3332,13 +3339,49 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
             "2028-05-31","2028-06-30","2028-07-31","2028-08-31","2028-09-29",
             "2028-10-31",
         ])
+     ao_29 = bond_exact_schedule(
+        name        = "AO29",
+        emisor      = "Tesoro Nacional",
+        curr        = "USD",
+        law         = "ARG",
+        start_date  = datetime(2026, 7, 31),
+        end_date    = datetime(2029, 10, 31),
+        payment_frequency  = 1,
+        amortization_dates = ["2029-10-31"],
+        amortizations      = [100],
+        rate               = 6,
+        price              = prices.loc[prices["symbol"] == "AO29", "px_bid"].iloc[0] / mep,
+        step_up_dates      = [],
+        step_up            = [],
+        outstanding        = 2000,
+        calificacion       = "CCC-",
+        coupon_dates_explicit = [
+            # 2026 (primer cupón irregular)
+            "2026-08-31", "2026-09-30", "2026-10-30",
+            "2026-11-30", "2026-12-30",
+            # 2027
+            "2027-01-29", "2027-02-26", "2027-03-31",
+            "2027-04-30", "2027-05-31", "2027-06-30",
+            "2027-07-30", "2027-08-31", "2027-09-30",
+            "2027-10-29", "2027-11-30", "2027-12-30",
+            # 2028
+            "2028-01-31", "2028-02-29", "2028-03-31",
+            "2028-04-28", "2028-05-31", "2028-06-30",
+            "2028-07-31", "2028-08-31", "2028-09-29",
+            "2028-10-31", "2028-11-30", "2028-12-29",
+            # 2029
+            "2029-01-31", "2029-02-28", "2029-03-28",
+            "2029-04-30", "2029-05-31", "2029-06-29",
+            "2029-07-31", "2029-08-31", "2029-09-28",
+            "2029-10-31",
+        ])
 
     return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
             al_29, al_30, al_35, ae_38, al_41,
             bpb7d, bpc7d, bpd7d, bpa8d, bpb8d,
             ba7dd, bb7dd, bc7dd, bpy6d,
             pm29d, sfd34, bdc33, co32d, an_29,
-            s24dd, ndt5d, ef25d, em33d, ao_27, ao_28]
+            s24dd, ndt5d, ef25d, em33d, ao_27, ao_28, ao_29]
 
 
 # =========================
@@ -3420,14 +3463,16 @@ LECAPS_ROWS = [
     
     # ("S15Y6","15/5/2026" ,"16/3/2026"  , 2.6  , "Fija"),
     # ("S29Y6","29/5/2026" ,"30/5/2025"  , 2.35 , "Fija"),
-    ("S12J6","12/6/2026" ,"30/4/2026"  , 2.1  , "Fija"),
-    ("T30J6","30/6/2026" ,"17/1/2025"  , 2.15 , "Fija"),
-    ("S17L6","17/7/2026" ,"31/3/2026"  , 2.16 , "Fija"),
+    # ("S12J6","12/6/2026" ,"30/4/2026"  , 2.1  , "Fija"),
+    # ("T30J6","30/6/2026" ,"17/1/2025"  , 2.15 , "Fija"),
+    # ("S17L6","17/7/2026" ,"31/3/2026"  , 2.16 , "Fija"),
     ("S31L6","31/7/2026" ,"30/1/2026"  , 2.75 , "Fija"),
+    ("S14G6","14/8/2026" ,"17/04/2026" , 2    , "Fija"),
     ("S31G6","31/8/2026" ,"10/11/2025" , 2.5  , "Fija"),
     ("S15S6","12/9/2026" ,"29/05/2026" , 1.99 , "Fija"),
     ("S30S6","30/9/2026" ,"16/3/2026"  , 2.53 , "Fija"),
     ("S30O6","30/10/2026","31/10/2025" , 2.55 , "Fija"),
+    ("S13N6","13/11/2026","30/06/2026" , 2.1  , "Fija"),
     ("S30N6","30/11/2026","15/12/2025" , 2.3  , "Fija"),
     ("T15E7","15/1/2027" ,"31/1/2025"  , 2.05 , "Fija"),
     ("T31Y7","31/5/2027" ,"15/12/2025" , 2.4  , "Fija"),
@@ -4209,8 +4254,14 @@ def main():
             ("TZXD7", "15/12/2027", "15/3/2024" , 271.0   , "CER"),
             ("TZX28", "30/6/2028" , "1/2/2024"  , 200.4   , "CER"),
             ("TZXS8", "29/9/2028" , "31/3/2026" , 725.8754, "CER"),
+            ("TZXD8", "15/12/2028", "30/6/2026" , 790.9415, "CER"),
+            ("TZXM9", "31/3/2029" , "31/3/2026" , 725.8754,"CER"),
             ("TXMJ9", "29/6/2029" , "30/4/2026" , 747.2132, "CER"),
-            ("TXMJ8", "30/6/2028" , "15/5/2026"  , 758.1179, "CER"),
+            ("TXMJ8", "30/6/2028" , "15/5/2026" , 758.1179, "CER"),
+            ("TXMD8", "15/12/2028", "12/6/2026" , 779.8863, "CER"),
+            ("TXMD9", "14/12/2029", "12/6/2026" , 779.8863, "CER"),
+            ("TXMJ0", "28/6/2030" , "12/6/2026" , 779.8863, "CER"),
+            
         ]
         cer_letras_objs = []
         for tk, vto, emi, cer_ini, _ in cer_rows:
@@ -4245,6 +4296,8 @@ def main():
             ("D31M7", "29/05/2026", "31/03/2027", "Dolar Linked"),
             ("TZV27", "27/02/2026", "30/06/2027", "Dolar Linked"),
             ("TZV28", "31/03/2026", "30/06/2028", "Dolar Linked"),
+            ("D10Y7", "17/07/2026", "10/05/2027", "Dolar Linked"),
+            ("TZVD8", "12/06/2026", "15/12/2028", "Dolar Linked"),
         ]
         
         def _price_any(df_all_norm, sym, prefer="px_ask"):
@@ -4337,6 +4390,11 @@ def main():
                 ("TMG28","31/8/2028" ,"30/4/2026" , tamar_tem_tmg28, "TAMAR"),
                 ("TXMJ9","29/6/2029" ,"30/4/2026" , tamar_tem_txmj9, "TAMAR"),
                 ("TXMJ8","30/6/2028" ,"15/5/2026" , tamar_tem_txmj8, "TAMAR"),
+                ("TXMD8","15/12/2029","12/6/2026" , tamar_tem_txmd8, "TAMAR"),
+                ("TXMD9","14/12/2029","12/6/2026" , tamar_tem_txmd9, "TAMAR"),
+                ("TXMJ0","28/6/2030" ,"12/6/2026" , tamar_tem_txmj0, "TAMAR"),
+                ("TML27","30/6/2028" ,"30/6/2026" , tamar_tem_tml27, "TAMAR"),
+                
             ]
             le_map_tamar = build_lecaps_objects(tamar_rows, df_all_norm, price_adj=1.0)  # sin ajuste de precio para TAMAR
             tamar_objs = list(le_map_tamar.values())
