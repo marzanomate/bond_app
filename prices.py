@@ -4390,7 +4390,7 @@ def main():
                 ("TMG28","31/8/2028" ,"30/4/2026" , tamar_tem_tmg28, "TAMAR"),
                 ("TXMJ9","29/6/2029" ,"30/4/2026" , tamar_tem_txmj9, "TAMAR"),
                 ("TXMJ8","30/6/2028" ,"15/5/2026" , tamar_tem_txmj8, "TAMAR"),
-                ("TXMD8","15/12/2029","12/6/2026" , tamar_tem_txmd8, "TAMAR"),
+                ("TXMD8","15/12/2028","12/6/2026" , tamar_tem_txmd8, "TAMAR"),
                 ("TXMD9","14/12/2029","12/6/2026" , tamar_tem_txmd9, "TAMAR"),
                 ("TXMJ0","28/6/2030" ,"12/6/2026" , tamar_tem_txmj0, "TAMAR"),
                 ("TML27","30/7/2027" ,"30/6/2026" , tamar_tem_tml27, "TAMAR"),
