@@ -333,7 +333,7 @@ def _summarize_tamar_with_spread(objs):
             "TNA30 (implícita)": round(tna30_imp, 2) if np.isfinite(tna30_imp) else np.nan,
             "TNA30 TAMAR ref.": ref_tna30,
             "Spread TNA30 (pp)": round(spread, 2) if np.isfinite(spread) else np.nan,
-            "Spread vs TAMAR EA (pp)": round((1+irr/100)/(1+tamar_ea_actual/100)-1, 2) if np.isfinite(irr) and np.isfinite(tamar_ea_actual) else np.nan,
+            "Spread vs TAMAR EA (pp)": round((100+irr/100)/(100+tamar_ea_actual/100)-100, 2) if np.isfinite(irr) and np.isfinite(tamar_ea_actual) else np.nan,
             "Dur": round(dur, 2) if np.isfinite(dur) else np.nan,
             "MD": round(md, 2) if np.isfinite(md) else np.nan,
             "Pago Final": _pago_final_from_obj(o),
