@@ -3339,7 +3339,8 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
             "2028-05-31","2028-06-30","2028-07-31","2028-08-31","2028-09-29",
             "2028-10-31",
         ])
-     ao_29 = bond_exact_schedule(
+    
+    ao_29 = bond_exact_schedule(
         name        = "AO29",
         emisor      = "Tesoro Nacional",
         curr        = "USD",
