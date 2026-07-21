@@ -148,12 +148,42 @@ def fetch_tamar_df(series_id: int = 44, daily_key: str = "") -> pd.DataFrame:
     df = df.dropna(subset=["fecha","valor"]).sort_values("fecha").reset_index(drop=True)
     return df
 
-def rows_before_label(idx: pd.DatetimeIndex, anchor: pd.Timestamp, n: int = 10) -> pd.Timestamp:
+def bdays_before(
+    idx: pd.DatetimeIndex,
+    anchor: pd.Timestamp,
+    n: int = 10,
+) -> pd.Timestamp:
+    """
+    Devuelve el Timestamp del índice (idx) más cercano (≤) a la fecha
+    resultante de retroceder `n` días hábiles desde `anchor`,
+    usando el calendario QuantLib Argentina (Merval) con feriados.
+
+    n = 0 → último dato disponible <= anchor (equivale al viejo n=0).
+    """
+    cal = ql.Argentina(ql.Argentina.Merval)
+
     anchor = pd.Timestamp(anchor)
-    pos = idx.searchsorted(anchor, side="right") - 1
-    if pos < 0: pos = 0
-    pos_n = max(pos - n, 0)
-    return idx[pos_n]
+    ql_d   = ql.Date(anchor.day, anchor.month, anchor.year)
+
+    # Si anchor cae en feriado/fin de semana, retroceder al hábil anterior
+    if not cal.isBusinessDay(ql_d):
+        ql_d = cal.adjust(ql_d, ql.Preceding)
+
+    # Retroceder n días hábiles
+    count = 0
+    while count < n:
+        ql_d = ql_d - 1
+        if cal.isBusinessDay(ql_d):
+            count += 1
+
+    target = pd.Timestamp(
+        year=ql_d.year(), month=ql_d.month(), day=ql_d.dayOfMonth()
+    )
+
+    # Último dato del índice que sea <= target
+    pos = idx.searchsorted(target, side="right") - 1
+    pos = max(pos, 0)
+    return idx[pos]
 
 # === Carga y procesamiento TAMAR ===
 try:
@@ -189,7 +219,8 @@ else:
     idx   = data_tamar.index
     today = pd.Timestamp.today().normalize()
 
-    # Anclas de emisión (fechas fijas según prospecto)
+    # anclas (ya las tenías)
+    today  = pd.Timestamp.today().normalize()
     jan29  = pd.Timestamp(year=2025, month=1,  day=29)
     ago18  = pd.Timestamp(year=2025, month=8,  day=18)
     ago29  = pd.Timestamp(year=2025, month=8,  day=29)
@@ -201,22 +232,30 @@ else:
     abr17  = pd.Timestamp(year=2026, month=4,  day=17)
     abr30  = pd.Timestamp(year=2026, month=4,  day=30)
     may15  = pd.Timestamp(year=2026, month=5,  day=15)
-
-    start        = rows_before_label(idx, jan29,  9)
-    start_m10n5  = rows_before_label(idx, ago18,  9)
-    start_m16e6  = rows_before_label(idx, ago18,  9)
-    start_m27f6  = rows_before_label(idx, ago29,  9)
-    start_m28n5  = rows_before_label(idx, ago19,  9)
-    start_m31g6  = rows_before_label(idx, nov10,  9)
-    start_m30a6  = rows_before_label(idx, nov28,  9)
-    start_tmf27  = rows_before_label(idx, feb13,  9)
-    start_tmg27  = rows_before_label(idx, mar31,  9)
-    start_tmf28  = rows_before_label(idx, abr17,  9)
-    start_tmg28  = rows_before_label(idx, abr30,  9)
-    start_txmj9  = rows_before_label(idx, abr30,  9)
-    start_txmj8  = rows_before_label(idx, may15,  10)
-    end          = rows_before_label(idx, today + pd.Timedelta(days=1), 6)
-
+    jun12  = pd.Timestamp(year=2026, month=6,  day=12)
+    jun30  = pd.Timestamp(year=2026, month=6,  day=30)
+    
+    # 10 días hábiles antes de la fecha de emisión
+    start        = bdays_before(idx, jan29,  10)
+    start_m10n5  = bdays_before(idx, ago18,  10)
+    start_m16e6  = bdays_before(idx, ago18,  10)
+    start_m27f6  = bdays_before(idx, ago29,  10)
+    start_m28n5  = bdays_before(idx, ago19,  10)
+    start_m31g6  = bdays_before(idx, nov10,  10)
+    start_m30a6  = bdays_before(idx, nov28,  10)
+    start_tmf27  = bdays_before(idx, feb13,  10)
+    start_tmg27  = bdays_before(idx, mar31,  10)
+    start_tmf28  = bdays_before(idx, abr17,  10)
+    start_tmg28  = bdays_before(idx, abr30,  10)
+    start_txmj9  = bdays_before(idx, abr30,  10)
+    start_txmj8  = bdays_before(idx, may15,  10)
+    start_txmd8  = bdays_before(idx, jun12,  10)
+    start_tml27  = bdays_before(idx, jun30,  10)
+    
+    # "10 filas arriba" de hoy + 1  (equivale a 10 filas antes de la última disponible <= hoy)
+    end       = bdays_before(idx, today, 10)
+    hoy_tamar = bdays_before(idx, today, 0)
+    
     tamar_window         = data_tamar.loc[start:end,       "valor"]
     tamar_window_m10n5   = data_tamar.loc[start_m10n5:end, "valor"]
     tamar_window_m16e6   = data_tamar.loc[start_m16e6:end, "valor"]
@@ -230,21 +269,26 @@ else:
     tamar_window_tmg28   = data_tamar.loc[start_tmg28:end, "valor"]
     tamar_window_txmj9   = data_tamar.loc[start_txmj9:end, "valor"]
     tamar_window_txmj8   = data_tamar.loc[start_txmj8:end, "valor"]
-
-    # Promedios en % TNA + spreads en pp
-    tamar_avg_pct_na        = float(tamar_window.mean())
-    tamar_avg_pct_na_m10n5  = float(tamar_window_m10n5.mean()) + 6
-    tamar_avg_pct_na_m16e6  = float(tamar_window_m16e6.mean()) + 7.5
-    tamar_avg_pct_na_m27f6  = float(tamar_window_m27f6.mean()) + 1.5
-    tamar_avg_pct_na_m28n5  = float(tamar_window_m28n5.mean()) + 1
-    tamar_avg_pct_na_m31g6  = float(tamar_window_m31g6.mean()) + 5
-    tamar_avg_pct_na_m30a6  = float(tamar_window_m30a6.mean()) + 4
-    tamar_avg_pct_na_tmf27  = float(tamar_window_tmf27.mean()) + 6.5
-    tamar_avg_pct_na_tmg27  = float(tamar_window_tmg27.mean()) + 6
+    tamar_window_txmd8   = data_tamar.loc[start_txmd8:end, "valor"]
+    tamar_window_tml27   = data_tamar.loc[start_tml27:end, "valor"]
+    
+    tamar_avg_pct_na       = tamar_window.mean()
+    tamar_avg_pct_na_m10n5 = tamar_window_m10n5.mean() + 6
+    tamar_avg_pct_na_m16e6 = tamar_window_m16e6.mean() + 7.5
+    tamar_avg_pct_na_m27f6 = tamar_window_m27f6.mean() + 1.5
+    tamar_avg_pct_na_m28n5 = tamar_window_m28n5.mean() + 1 # Esta TAMAR la tienen solo Bancos
+    tamar_avg_pct_na_m31g6 = tamar_window_m31g6.mean() + 5
+    tamar_avg_pct_na_m30a6 = tamar_window_m30a6.mean() + 4
+    tamar_avg_pct_na_tmf27 = tamar_window_tmf27.mean() + 6.5
+    tamar_avg_pct_na_tmg27 = tamar_window_tmg27.mean() + 6
     tamar_avg_pct_na_tmf28 = tamar_window_tmf28.mean() + 6.5
     tamar_avg_pct_na_tmg28 = tamar_window_tmg28.mean() + 6.9
     tamar_avg_pct_na_txmj9 = tamar_window_txmj9.mean() + 3
     tamar_avg_pct_na_txmj8 = tamar_window_txmj8.mean() + 3
+    tamar_avg_pct_na_txmd8 = tamar_window_txmd8.mean() + 3
+    tamar_avg_pct_na_txmd9 = tamar_window_txmd8.mean() + 3
+    tamar_avg_pct_na_txmj0 = tamar_window_txmd8.mean() + 3
+    tamar_avg_pct_na_tml27 = tamar_window_tml27.mean() + 5.4
 
     # Último valor TAMAR disponible (en %)
     tamar_hoy = float(data_tamar["valor"].asof(today))
