@@ -3351,7 +3351,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         amortization_dates = ["2029-10-31"],
         amortizations      = [100],
         rate               = 6,
-        price              = prices.loc[prices["symbol"] == "AO29", "px_bid"].iloc[0] / mep,
+        price               = px_mep("AO28", prefer="px_bid"),
         step_up_dates      = [],
         step_up            = [],
         outstanding        = 2000,
