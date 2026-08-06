@@ -4290,7 +4290,7 @@ def main():
             # ---------- DLK (usa oficial t-1) ----------
         # ---------- DLK (siempre mostrar todos los tickers) ----------
         dlk_rows = [
-            
+            ("D31G6", "12/06/2026", "31/08/2026", "Dolar Linked"),
             ("D30S6", "16/03/2026", "30/09/2026", "Dolar Linked"),
             ("D15E7", "28/07/2026", "15/01/2027", "Dolar Linked"),
             ("D31M7", "29/05/2026", "31/03/2027", "Dolar Linked"),
