@@ -3386,6 +3386,334 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
 
 
 # =========================
+# Portfolio: TIR, Modified Duration, composición y Excel Empiria
+# =========================
+# Paleta Empiria. Ojo: acá NO se usa `from empiria_graficos import *`, porque ese
+# módulo define `fetch_json` y `_requests_session`, que pisarían las de esta app.
+try:
+    import empiria_graficos as _eg
+    EMPIRIA_COLORS = list(_eg.CUSTOM_COLORS)
+except Exception:
+    EMPIRIA_COLORS = ["#08306b", "#bdbdbd", "#2171b5", "#525252",
+                      "#6baed6", "#252525", "#9ecae1", "#969696"]
+
+# Colores de la casa para el Excel (mismos que el Resumen de Cartera)
+EMP_NAVY, EMP_TOTAL, EMP_BG = "16305C", "4894CD", "F7FAFC"
+EMP_LINE, EMP_TXT, EMP_GRAY = "E6ECF2", "1F2A37", "7B8794"
+
+
+def _precio_limpio_input(b, mode: str, inputs: dict) -> float:
+    """Precio limpio (por 100 VN): el manual si se cargó (modo Monto), si no el de mercado."""
+    if mode == "Monto":
+        manual = (inputs.get(b.name) or {}).get("precio")
+        if manual:
+            return float(manual)
+    return float(b.price)
+
+
+def vn_from_input(b, mode: str, inputs: dict, settlement=None) -> float:
+    """
+    VN real del bono en el portfolio.
+    - Nominal: lo que cargó el usuario.
+    - Monto:   monto / precio SUCIO * 100  (lo que se paga es limpio + corrido).
+    """
+    if mode == "Nominal":
+        return float(inputs.get(b.name, 0) or 0)
+    monto = float((inputs.get(b.name) or {}).get("monto", 0) or 0)
+    sucio = _precio_limpio_input(b, mode, inputs) + float(b.accrued_interest(settlement))
+    if not (np.isfinite(sucio) and sucio > 0):
+        return 0.0
+    return monto / sucio * 100.0
+
+
+def _xirr_fechas(fechas: list, flujos) -> float:
+    """TIR efectiva anual (decimal), Act/365 desde fechas[0]. Misma convención que XIRR de Excel."""
+    t = np.array([(f - fechas[0]).days / 365.0 for f in fechas], dtype=float)
+    c = np.asarray(flujos, dtype=float)
+    npv = lambda r: float(np.sum(c / (1.0 + r) ** t))
+    try:
+        return optimize.brentq(npv, -0.99, 10.0, xtol=1e-12, maxiter=500)
+    except ValueError:
+        return float("nan")
+
+
+def _duration_fechas(fechas: list, flujos, r: float) -> tuple:
+    """(Macaulay, Modified) descontando a la TIR efectiva anual r. Excluye el flujo t0."""
+    if not np.isfinite(r):
+        return float("nan"), float("nan")
+    t = np.array([(f - fechas[0]).days / 365.0 for f in fechas], dtype=float)[1:]
+    c = np.asarray(flujos, dtype=float)[1:]
+    pv = c / (1.0 + r) ** t
+    if pv.sum() <= 0:
+        return float("nan"), float("nan")
+    mac = float((t * pv).sum() / pv.sum())
+    return mac, mac / (1.0 + r)
+
+
+def portfolio_analytics(selected_bonds: list, mode: str, inputs: dict, settlement=None) -> dict:
+    """
+    Arma el portfolio a precio sucio y calcula:
+      - TIR del portfolio: XIRR del flujo consolidado (t0 = -Σ valor sucio).
+      - Duration / MD del portfolio: sobre ese mismo flujo, a la TIR del portfolio.
+      - MD ponderada: Σ peso_i * MD_i (referencia; no es igual a la anterior si la curva no es plana).
+    """
+    comp_rows, cf_rows, excluidos = [], [], []
+    stl = None
+
+    for b in selected_bonds:
+        vn = vn_from_input(b, mode, inputs, settlement)
+        limpio = _precio_limpio_input(b, mode, inputs)
+        if vn <= 0:
+            continue
+        if not (np.isfinite(limpio) and limpio > 0):
+            excluidos.append(b.name)
+            continue
+
+        corrido = float(b.accrued_interest(settlement))
+        sucio = limpio + corrido
+        fechas = [datetime.strptime(s, "%Y-%m-%d").date() for s in b.generate_payment_dates(settlement)]
+        cpns = b.coupon_payments(settlement)
+        caps = b.amortization_payments(settlement)
+        stl = fechas[0]
+
+        # Métricas individuales con la MISMA convención que el portfolio (precio sucio, efectiva anual)
+        flujos_b = [-sucio] + [c + a for c, a in zip(cpns[1:], caps[1:])]
+        tir_b = _xirr_fechas(fechas, flujos_b)
+        mac_b, md_b = _duration_fechas(fechas, flujos_b, tir_b)
+
+        comp_rows.append({
+            "Ticker": b.name, "Emisor": b.emisor, "VN": vn,
+            "Precio limpio": limpio, "Int. corrido": corrido, "Precio sucio": sucio,
+            "Valor (USD)": vn / 100.0 * sucio,
+            "TIR": tir_b, "Duration": mac_b, "MD": md_b,
+        })
+        for d, c, a in zip(fechas[1:], cpns[1:], caps[1:]):
+            cf_rows.append({"Fecha": d, "Ticker": b.name,
+                            "Cupón": c * vn / 100.0, "Capital": a * vn / 100.0,
+                            "Total": (c + a) * vn / 100.0})
+
+    comp = pd.DataFrame(comp_rows)
+    vacio = {"composicion": comp, "flujos": pd.DataFrame(), "flujos_bono": pd.DataFrame(),
+             "metricas": {}, "excluidos": excluidos}
+    if comp.empty:
+        return vacio
+
+    valor_total = float(comp["Valor (USD)"].sum())
+    comp["Peso"] = comp["Valor (USD)"] / valor_total
+
+    flujos_bono = pd.DataFrame(cf_rows).sort_values(["Fecha", "Ticker"]).reset_index(drop=True)
+    flujos = flujos_bono.groupby("Fecha", as_index=False)[["Cupón", "Capital", "Total"]].sum()
+
+    fechas_p = [stl] + flujos["Fecha"].tolist()
+    flujos_p = [-valor_total] + flujos["Total"].tolist()
+    tir_p = _xirr_fechas(fechas_p, flujos_p)
+    mac_p, md_p = _duration_fechas(fechas_p, flujos_p, tir_p)
+
+    metricas = {
+        "settlement": stl,
+        "valor": valor_total,
+        "tir": tir_p,
+        "duration": mac_p,
+        "md": md_p,
+        "md_pond": float((comp["Peso"] * comp["MD"]).sum()),
+        "n_bonos": len(comp),
+    }
+    return {"composicion": comp, "flujos": flujos, "flujos_bono": flujos_bono,
+            "metricas": metricas, "excluidos": excluidos}
+
+
+def portfolio_pie(comp: pd.DataFrame, agrupar: str = "Ticker") -> go.Figure:
+    """Torta de composición por valor de mercado (sucio), colores Empiria."""
+    g = comp.groupby(agrupar, as_index=False)["Valor (USD)"].sum().sort_values("Valor (USD)", ascending=False)
+    colores = [EMPIRIA_COLORS[i % len(EMPIRIA_COLORS)] for i in range(len(g))]
+    fig = go.Figure(go.Pie(
+        labels=g[agrupar], values=g["Valor (USD)"], sort=False,
+        marker=dict(colors=colores, line=dict(color="white", width=1.5)),
+        textinfo="label+percent", textposition="inside", insidetextorientation="horizontal",
+        hovertemplate="%{label}<br>USD %{value:,.2f}<br>%{percent}<extra></extra>",
+    ))
+    fig.update_layout(
+        template="simple_white", font=dict(family="Tahoma", size=13),
+        title=dict(text=f"Composición del portfolio por {agrupar.lower()}", font=dict(family="Tahoma", size=16)),
+        legend=dict(orientation="v"), margin=dict(t=60, b=20, l=10, r=10), height=420,
+    )
+    return fig
+
+
+def build_portfolio_excel(port: dict) -> bytes:
+    """Excel con formato Empiria: Resumen (+ torta), Flujos consolidados y Flujos por bono."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.chart import PieChart, Reference
+    from openpyxl.chart.series import DataPoint
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.utils import get_column_letter
+
+    comp, flujos, flujos_bono, m = port["composicion"], port["flujos"], port["flujos_bono"], port["metricas"]
+
+    F = "Tahoma"
+    f_title = Font(name=F, size=16, bold=True, color=EMP_NAVY)
+    f_sub = Font(name=F, size=10, bold=True, color=EMP_NAVY)
+    f_note = Font(name=F, size=8, color=EMP_GRAY)
+    f_head = Font(name=F, size=10, bold=True, color="FFFFFF")
+    f_body = Font(name=F, size=10, color=EMP_TXT)
+    f_first = Font(name=F, size=10, bold=True, color=EMP_NAVY)
+    f_tot = Font(name=F, size=10, bold=True, color="FFFFFF")
+    fill_head = PatternFill("solid", fgColor=EMP_NAVY)
+    fill_tot = PatternFill("solid", fgColor=EMP_TOTAL)
+    fill_kpi = PatternFill("solid", fgColor=EMP_BG)
+    b_line = Border(bottom=Side(style="thin", color=EMP_LINE))
+    center, right, left = Alignment(horizontal="center", vertical="center", wrap_text=True), \
+        Alignment(horizontal="right"), Alignment(horizontal="left")
+
+    FMT = {"usd": '#,##0.00', "vn": '#,##0', "px": '0.00', "pct": '0.00%', "dur": '0.00', "fecha": 'DD/MM/YYYY'}
+    stl_txt = m["settlement"].strftime("%d/%m/%Y")
+
+    def encabezado(ws, titulo, ncols):
+        ws.sheet_view.showGridLines = False
+        ws["A1"] = titulo
+        ws["A1"].font = f_title
+        ws["A2"] = f"Settlement: {stl_txt}  |  Generado: {datetime.now(ZoneInfo('America/Argentina/Buenos_Aires')):%d/%m/%Y %H:%M}"
+        ws["A2"].font = f_sub
+        ws.row_dimensions[1].height = 24
+
+    def tabla(ws, fila0, columnas, filas, formatos):
+        """Escribe header navy + filas. Devuelve la última fila escrita."""
+        for j, col in enumerate(columnas, start=1):
+            c = ws.cell(row=fila0, column=j, value=col)
+            c.font, c.fill, c.alignment = f_head, fill_head, center
+        ws.row_dimensions[fila0].height = 30
+        r = fila0
+        for fila in filas:
+            r += 1
+            for j, (col, v) in enumerate(zip(columnas, fila), start=1):
+                c = ws.cell(row=r, column=j, value=v)
+                c.font = f_first if j == 1 else f_body
+                c.border = b_line
+                c.alignment = left if j == 1 else right
+                if formatos.get(col):
+                    c.number_format = FMT[formatos[col]]
+        return r
+
+    def fila_total(ws, r, ncols, valores: dict, formatos: dict, columnas):
+        for j in range(1, ncols + 1):
+            c = ws.cell(row=r, column=j, value=valores.get(j))
+            c.font, c.fill = f_tot, fill_tot
+            c.alignment = left if j == 1 else right
+            col = columnas[j - 1]
+            if formatos.get(col):
+                c.number_format = FMT[formatos[col]]
+
+    wb = Workbook()
+
+    # ---------------- Hoja 1: Resumen ----------------
+    ws = wb.active
+    ws.title = "Resumen"
+    encabezado(ws, "Empiria — Portfolio de bonos", 11)
+
+    kpis = [("Valor invertido (USD, precio sucio)", m["valor"], "usd"),
+            ("TIR del portfolio (efectiva anual)", m["tir"], "pct"),
+            ("Modified Duration del portfolio", m["md"], "dur"),
+            ("Duration (Macaulay)", m["duration"], "dur"),
+            ("MD ponderada por valor (referencia)", m["md_pond"], "dur"),
+            ("Cantidad de bonos", m["n_bonos"], "vn")]
+    r = 4
+    for lbl, val, fm in kpis:
+        a = ws.cell(row=r, column=1, value=lbl); a.font, a.fill, a.border = f_first, fill_kpi, b_line
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+        v = ws.cell(row=r, column=4, value=val); v.font, v.fill, v.border = f_first, fill_kpi, b_line
+        v.number_format, v.alignment = FMT[fm], right
+        r += 1
+
+    cols = ["Ticker", "Emisor", "VN", "Precio limpio", "Int. corrido", "Precio sucio",
+            "Valor (USD)", "Peso", "TIR", "Duration", "MD"]
+    fmts = {"VN": "vn", "Precio limpio": "px", "Int. corrido": "px", "Precio sucio": "px",
+            "Valor (USD)": "usd", "Peso": "pct", "TIR": "pct", "Duration": "dur", "MD": "dur"}
+    fila0 = r + 1
+    comp_sorted = comp.sort_values("Valor (USD)", ascending=False)
+    filas = comp_sorted[cols].itertuples(index=False, name=None)
+    r_last = tabla(ws, fila0, cols, filas, fmts)
+    c_val, c_peso = cols.index("Valor (USD)") + 1, cols.index("Peso") + 1
+    L_val = get_column_letter(c_val)
+    fila_total(ws, r_last + 1, len(cols), {
+        1: "Portfolio",
+        c_val: f"=SUM({L_val}{fila0 + 1}:{L_val}{r_last})",
+        c_peso: f"=SUM({get_column_letter(c_peso)}{fila0 + 1}:{get_column_letter(c_peso)}{r_last})",
+        cols.index("TIR") + 1: m["tir"],
+        cols.index("Duration") + 1: m["duration"],
+        cols.index("MD") + 1: m["md"],
+    }, fmts, cols)
+    nota = ws.cell(row=r_last + 3, column=1, value=(
+        "Valores a precio sucio (limpio + interés corrido). TIR efectiva anual, Act/365. "
+        "La TIR y la MD del portfolio salen del flujo consolidado; la fila 'Portfolio' no es un promedio."))
+    nota.font = f_note
+
+    for j, w in enumerate([12, 22, 12, 11, 11, 11, 15, 9, 9, 10, 9], start=1):
+        ws.column_dimensions[get_column_letter(j)].width = w
+
+    # Torta nativa de Excel (por ticker, sobre la columna Valor)
+    pie = PieChart()
+    pie.title = "Composición por ticker"
+    data = Reference(ws, min_col=c_val, min_row=fila0, max_row=r_last)
+    labels = Reference(ws, min_col=1, min_row=fila0 + 1, max_row=r_last)
+    pie.add_data(data, titles_from_data=True)
+    pie.set_categories(labels)
+    for i in range(r_last - fila0):
+        pt = DataPoint(idx=i)
+        pt.graphicalProperties.solidFill = EMPIRIA_COLORS[i % len(EMPIRIA_COLORS)].lstrip("#")
+        pt.graphicalProperties.line.solidFill = "FFFFFF"
+        pie.series[0].dPt.append(pt)
+    pie.dataLabels = DataLabelList()
+    pie.dataLabels.showPercent = True
+    pie.dataLabels.showVal = pie.dataLabels.showCatName = False
+    pie.dataLabels.showSerName = pie.dataLabels.showLegendKey = False
+    pie.height, pie.width = 9, 13
+    ws.add_chart(pie, f"M{fila0}")
+    ws.freeze_panes = None
+
+    # ---------------- Hoja 2: Flujos consolidados ----------------
+    ws2 = wb.create_sheet("Flujos")
+    encabezado(ws2, "Empiria — Flujo consolidado del portfolio (USD)", 4)
+    cols2 = ["Fecha", "Cupón", "Capital", "Total"]
+    fmts2 = {"Fecha": "fecha", "Cupón": "usd", "Capital": "usd", "Total": "usd"}
+    fila0_2 = 4
+    filas2 = [(m["settlement"], None, None, -m["valor"])] + \
+             list(flujos[cols2].itertuples(index=False, name=None))
+    r2 = tabla(ws2, fila0_2, cols2, filas2, fmts2)
+    ws2.cell(row=fila0_2 + 1, column=1).number_format = FMT["fecha"]
+    fila_total(ws2, r2 + 1, 4, {
+        1: "Total cobros",
+        2: f"=SUM(B{fila0_2 + 2}:B{r2})",
+        3: f"=SUM(C{fila0_2 + 2}:C{r2})",
+        4: f"=SUM(D{fila0_2 + 2}:D{r2})",
+    }, fmts2, cols2)
+    ws2.cell(row=r2 + 1, column=1).number_format = "General"
+    chk_l = ws2.cell(row=r2 + 3, column=1, value="TIR (XIRR Excel, control)")
+    chk_l.font = f_first
+    chk = ws2.cell(row=r2 + 3, column=4, value=f"=XIRR(D{fila0_2 + 1}:D{r2},A{fila0_2 + 1}:A{r2})")
+    chk.font, chk.number_format, chk.alignment = f_first, FMT["pct"], right
+    ws2.cell(row=r2 + 4, column=1,
+             value="La primera fila es la inversión inicial (settlement, precio sucio).").font = f_note
+    for j, w in enumerate([14, 15, 15, 15], start=1):
+        ws2.column_dimensions[get_column_letter(j)].width = w
+    ws2.freeze_panes = f"A{fila0_2 + 1}"
+
+    # ---------------- Hoja 3: Flujos por bono ----------------
+    ws3 = wb.create_sheet("Flujos por bono")
+    encabezado(ws3, "Empiria — Flujos por bono (USD)", 5)
+    cols3 = ["Fecha", "Ticker", "Cupón", "Capital", "Total"]
+    fmts3 = {"Fecha": "fecha", "Cupón": "usd", "Capital": "usd", "Total": "usd"}
+    r3 = tabla(ws3, 4, cols3, flujos_bono[cols3].itertuples(index=False, name=None), fmts3)
+    for j, w in enumerate([14, 12, 15, 15, 15], start=1):
+        ws3.column_dimensions[get_column_letter(j)].width = w
+    ws3.freeze_panes = "A5"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# =========================
 # Simulador de flujos
 # =========================
 
@@ -3397,14 +3725,8 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict) -> pd.Da
         coupons = b.coupon_payments()[1:]
         capitals = b.amortization_payments()[1:]
 
-        if mode == "Nominal":
-            nominal = float(inputs.get(b.name, 0) or 0) / 100
-        else:  # Monto
-            user_in = inputs.get(b.name, {})
-            monto = float(user_in.get("monto", 0) or 0)
-            precio_manual = user_in.get("precio", None)
-            precio = precio_manual if precio_manual else b.price
-            nominal = (monto / precio) if (precio and precio == precio) else 0.0
+        # VN/100. En modo Monto se compra a precio SUCIO (limpio + corrido).
+        nominal = vn_from_input(b, mode, inputs) / 100.0
 
         for d, cpn, cap in zip(dates, coupons, capitals):
             rows.append({
@@ -3758,6 +4080,50 @@ def main():
                     "Total":  st.column_config.NumberColumn(format="%.2f"),
                 },
             )
+
+            # ---------- Portfolio: TIR, MD, composición y Excel ----------
+            port = portfolio_analytics(selected_objs, mode, inputs)
+            if port["excluidos"]:
+                st.warning("Sin precio válido, excluidos del portfolio: " + ", ".join(port["excluidos"]))
+
+            if port["composicion"].empty:
+                st.info("Cargá VN o monto mayor a 0 para calcular TIR y duration del portfolio.")
+            else:
+                m = port["metricas"]
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Valor invertido (USD)", f"{m['valor']:,.2f}",
+                          help="Precio sucio = limpio + interés corrido, por VN.")
+                k2.metric("TIR portfolio", f"{m['tir'] * 100:.2f}%",
+                          help="XIRR del flujo consolidado. Efectiva anual, Act/365.")
+                k3.metric("Modified Duration", f"{m['md']:.2f}",
+                          help="Sobre el flujo consolidado, a la TIR del portfolio.")
+                k4.metric("MD ponderada", f"{m['md_pond']:.2f}",
+                          help="Σ peso × MD individual. Referencia: difiere de la MD del portfolio si la curva no es plana.")
+
+                c_pie, c_tab = st.columns([1, 1])
+                with c_pie:
+                    agrupar = st.radio("Agrupar torta por", ["Ticker", "Emisor"],
+                                       horizontal=True, key="port_pie_group")
+                    st.plotly_chart(portfolio_pie(port["composicion"], agrupar), use_container_width=True)
+                with c_tab:
+                    st.markdown("**Composición (precio sucio):**")
+                    st.dataframe(
+                        port["composicion"][["Ticker", "VN", "Precio sucio", "Valor (USD)", "Peso", "TIR", "MD"]]
+                            .sort_values("Valor (USD)", ascending=False)
+                            .style.format({"VN": "{:,.0f}", "Precio sucio": "{:.2f}", "Valor (USD)": "{:,.2f}",
+                                           "Peso": "{:.2%}", "TIR": "{:.2%}", "MD": "{:.2f}"}, na_rep="—"),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.caption("TIR y MD individuales a precio sucio: pueden diferir de las del panel, "
+                               "que usan precio limpio.")
+
+                st.download_button(
+                    "📥 Descargar Excel del portfolio (formato Empiria)",
+                    data=build_portfolio_excel(port),
+                    file_name=f"empiria_portfolio_{date.today():%Y%m%d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="port_xlsx",
+                )
         else:
             st.info("Seleccioná al menos un bono para ver flujos.")
 
