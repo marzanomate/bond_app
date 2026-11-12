@@ -2989,6 +2989,37 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     rate=3, price=px("BPY6D"),
     step_up_dates=[], step_up=[], outstanding=966, calificacion="CCC-"
     )
+
+    # --- Cronograma de amortización del PUA36 -----------------------------------
+    # 28 cuotas trimestrales IGUALES (acá sí son iguales, confirmado por tu CF),
+    # tras 3 años de gracia. Primera: 29-07-2029. Última: 29-04-2036 (vencimiento).
+    amort_dates, _d = [], datetime(2029, 7, 29)
+    for _ in range(28):
+        amort_dates.append(_d.strftime("%Y-%m-%d"))
+        _d += relativedelta(months=3)
+    amort_amts = [100.0 / 28] * 28          # 3,5714% c/u (tu feed lo muestra como 3,57)
+    
+    assert len(amort_dates) == 28
+    assert abs(sum(amort_amts) - 100.0) < 1e-9
+    
+    # --- Bono --------------------------------------------------------------------
+    pua36 = bond_calculator_pro(
+        name="PUA36",
+        emisor="Chubut",
+        curr="USD",                          # USD; el mep es decisión de valuación, no del bono
+        law="NY",                            # confirmado: ley de Nueva York
+        start_date=datetime(2026, 4, 29),    # emisión real (importa para el 1er cupón)
+        end_date=datetime(2036, 4, 29),      # vencimiento
+        payment_frequency=3,                 # TRIMESTRAL
+        amortization_dates=amort_dates,
+        amortizations=amort_amts,
+        rate=0.0945,                         # 9,45% fijo, SIN step-ups
+        price=prices.loc[prices["symbol"] == "PUA36", "px_ask"].iloc[0] / mep,  # ver nota
+        step_up_dates=[],                    # tasa plana → listas vacías
+        step_up=[],
+        outstanding=650,                     # nominal de emisión (USD M)
+        calificacion="???",                  # completar con rating vigente
+    )
     
     # =========================
     # BA7DD
@@ -3216,6 +3247,26 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
                 step_up = [],
                 outstanding = 725, 
                 calificacion = "CCC-")
+
+    co35d = bond_calculator_pro(
+            name = "CO35D",
+            emisor = "Córdoba",
+            curr = "mep",
+            law = "NY",
+            start_date = datetime(2026, 2, 3),
+            end_date = datetime(2035, 2, 3),
+            payment_frequency = 6,
+            amortization_dates = ["2033-02-03",
+                                  "2034-02-03",
+                                "2035-02-03"],
+            amortizations = [33, 33, 34],
+            rate = 8.6,
+            price = prices.loc[prices["symbol"] == "CO35", "px_ask"].iloc[0] / mep,
+            step_up_dates = [],
+            step_up = [],
+            outstanding = 800, 
+            calificacion = "CCC-")
+
     
     an_29 = bond_calculator_pro(
             name="AN29",
@@ -3285,6 +3336,24 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         step_up=[0.025,0.04625,0.06625,0.0675,0.06875],
         outstanding=377, calificacion="CCC-")
 
+    ndg34 = bond_calculator_pro(
+        name="NDG34",
+        emisor="Neuquén",
+        curr="mep",
+        law="NY",
+        start_date=datetime(2026, 8, 25),
+        end_date=datetime(2034, 8, 25),
+        payment_frequency=6,
+        amortization_dates=["2032-08-25", "2033-08-25", "2034-08-25"],
+        amortizations=[33.0, 33.0, 34.0],
+        rate=0.0735,
+        price=prices.loc[prices["symbol"] == "NDG34", "px_ask"].iloc[0] / mep,
+        step_up_dates=[],
+        step_up=[],
+        outstanding=500,
+        calificacion=None,
+    )
+
     # ── Entre Ríos ────────────────────────────────────────────────
     ef25d = bond_calculator_pro(
         name="EF25D", emisor="Entre Ríos", curr="CCL", law="NY",
@@ -3308,6 +3377,54 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         rate=0.0956, price=px("EM33D", prefer="px_ask"),
         step_up_dates=[], step_up=[],
         outstanding=517, calificacion="CCC-")
+
+    sjo5d = bond_calculator_pro(
+        name="SJO5D",
+        emisor="San Juan",        # 🔁 reemplazá por el emisor real si querés
+        curr="CCL",
+        law="NY",                    # o "ARG" si corresponde ley local
+    
+        # Devengo desde la primera fecha del prospecto
+        start_date=datetime(2026, 10, 1),
+        end_date=datetime(2035, 10, 1),
+    
+        # Pagos semestrales (8 feb / 8 ago)
+        payment_frequency=6,
+    
+        # --- Amortización de capital ---
+        # 8-Feb-2023: 5%
+        # 8-Aug-2023: 5%
+        # 8-Feb-2024 ... 8-Aug-2028: 9% cada uno
+        amortization_dates=[
+            "2033-10-01",  
+            "2034-10-01",  
+            "2035-10-01",  
+        ],
+        amortizations=[
+            33,
+            33,
+            34
+        ],  # 5 + 5 + 10*9 = 100
+    
+        # Tasa base: primera del schedule
+        rate=0.0955,
+    
+        # Precio desde tu DataFrame
+        price=prices.loc[prices["symbol"] == "SJO35", "px_ask"].iloc[0] / mep,
+    
+        # --- Step-up de cupones ---
+        # [2021-02-08, 2022-08-08): 5.00%
+        # [2022-08-08, 2023-02-08): 5.75%
+        # [2023-02-08, 2023-08-08): 8.10%
+        # [2023-08-08, 2028-08-08): 8.25%
+        step_up_dates=[],
+        step_up=[],
+    
+        # Completar cuando tengas el dato
+        outstanding=600,          # VN en millones (o tu convención)
+        calificacion="CCC-",     # ej. "CCC", "B-", etc.
+    )
+
 
     # ── Tesoro AO (exact schedule) ────────────────────────────────
     ao_27 = bond_exact_schedule(
