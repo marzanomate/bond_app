@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from urllib3.exceptions import InsecureRequestWarning
 from requests.exceptions import HTTPError, RequestException, ConnectTimeout, ReadTimeout
 import os
-import holidays
+import copy
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -476,7 +476,9 @@ def fetch_riesgo_pais(daily_key: str = "") -> dict:
     }
 
 # --- DolarAPI: todas las cotizaciones excepto "tarjeta" ---
-@st.cache_data(show_spinner=False)
+# ttl=10 min: sin ttl el MEP/CCL quedaba congelado todo el día (daily_key) mientras
+# los precios de data912 se refrescan cada 20 min -> Precio USD = ARS/TC con TC viejo.
+@st.cache_data(ttl=10*60, show_spinner=False)
 def fetch_dolares(daily_key: str = "") -> pd.DataFrame:
     import urllib3
     url = "https://dolarapi.com/v1/dolares"
@@ -771,14 +773,13 @@ class bond_calculator_pro:
 
     # ----------------- flujos -----------------
     def cash_flow(self, settlement: Optional[datetime] = None) -> List[float]:
-        key = ("cash", (settlement or 0))
-        if key in self._cache:
-            return self._cache[key]
+        # NO se cachea: el flujo t0 depende de self.price, que se muta en
+        # yield_from_price() y en los conversores Precio→TIR. Con caché, la TIR
+        # quedaba clavada en la del precio original. Cupones y amortizaciones
+        # (que no dependen del precio) siguen cacheados.
         caps = self.amortization_payments(settlement)
         cpns = self.coupon_payments(settlement)
-        cfs = [-self.price] + [c + a for c, a in zip(cpns[1:], caps[1:])]
-        self._cache[key] = cfs
-        return cfs
+        return [-self.price] + [c + a for c, a in zip(cpns[1:], caps[1:])]
 
     # ----------------- PV / IRR -----------------
     def _times_years(self, settlement: Optional[datetime] = None) -> np.ndarray:
@@ -1088,7 +1089,7 @@ class lecaps:
         dates = self.generate_payment_dates()
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
-        d0 = self.settlement
+        d0 = dates[0]   # liquidación ajustada, sin hora (antes self.settlement con hora)
         return sum(
             cf / (1.0 + rate_custom) ** ((dt - d0).days / 365.0)
             for cf, dt in zip(cash_flow, dates)
@@ -1118,7 +1119,7 @@ class lecaps:
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
         irr = self.xirr() / 100.0
-        d0 = self.settlement
+        d0 = dates[0]
         # evitar división por cero
         if not np.isfinite(irr):
             return float("nan")
@@ -1475,7 +1476,7 @@ class cer:
         dates = self.generate_payment_dates()
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
-        d0 = self.settlement
+        d0 = dates[0]   # liquidación ajustada, sin hora
         npv = sum([cf / (1.0 + rate_custom) ** ((date - d0).days / 365.0)
                    for cf, date in zip(cash_flow, dates)])
         return npv
@@ -1487,14 +1488,16 @@ class cer:
         try:
             result = optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
         except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
+            # antes: scipy.optimize.brentq -> NameError ('scipy' no está importado) y
+            # cota -1.0 -> (1+r)^t = 0 -> división por cero
+            result = optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -0.99, 1e10)
         return round(result * 100, 2)
 
     def tem_from_irr(self):
         irr = self.xirr() / 100                     # IRR as decimal (effective annual)
         tem = (1 + irr) ** (30 / 365) - 1    # 30/365 convention
         return round(tem * 100, 2)
-    
+
     def tna30(self) :
         tem_dec = ((1 + (self.xirr() / 100)) ** (30 / 365)) - 1
         tna30 = tem_dec * 12
@@ -1505,7 +1508,7 @@ class cer:
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
         irr = self.xirr() / 100
-        d0 = self.settlement
+        d0 = dates[0]
 
         duration = sum([(cf * (date - d0).days / 365.0) /
                         (1 + irr) ** ((date - d0).days / 365.0)
@@ -1523,9 +1526,10 @@ class cer:
         try:
             r = float(irr_pct)/100.0
             if not np.isfinite(r): return float("nan")
-            d0 = self.settlement
+            d0 = self._adjust_next_business_day(self.settlement)
             dm = self._adjust_next_business_day(self.end_date)
-            t  = max(0.0, (dm - d0).days/360.0)
+            # ACT/365, igual que xnpv(); con /360 price_from_irr(xirr()) no devolvía el precio
+            t  = max(0.0, (dm - d0).days/365.0)
             final_payment = 100.0 * (self.cer_final/self.cer_inicial)
             return round(final_payment / ((1.0 + r)**t), 2)
         except Exception:
@@ -1574,7 +1578,7 @@ class dlk:
         dates = self.generate_payment_dates()
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
-        d0 = self.settlement
+        d0 = dates[0]   # liquidación ajustada, sin hora
         npv = sum([cf / (1.0 + rate_custom) ** ((date - d0).days / 360.0)
                    for cf, date in zip(cash_flow, dates)])
         return npv
@@ -1586,14 +1590,14 @@ class dlk:
         try:
             result = optimize.newton(lambda r: self.xnpv(dates, cash_flow, r), 0.0)
         except RuntimeError:
-            result = scipy.optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -1.0, 1e10)
+            result = optimize.brentq(lambda r: self.xnpv(dates, cash_flow, r), -0.99, 1e10)
         return round(result * 100, 2)
 
     def tem_from_irr(self):
         irr = self.xirr() / 100                     # IRR as decimal (effective annual)
         tem = (1 + irr) ** (30 / 365) - 1    # 30/365 convention
         return round(tem * 100, 2)
-    
+
     def tna30(self) :
         tem_dec = ((1 + (self.xirr() / 100)) ** (30 / 360)) - 1
         tna30 = tem_dec * 12
@@ -1604,7 +1608,7 @@ class dlk:
         dates = [datetime.strptime(date_str, '%Y-%m-%d') for date_str in dates]
         cash_flow = self.cash_flow()
         irr = self.xirr() / 100
-        d0 = self.settlement
+        d0 = dates[0]
 
         duration = sum([(cf * (date - d0).days / 360.0) /
                         (1 + irr) ** ((date - d0).days / 360.0)
@@ -1622,10 +1626,10 @@ class dlk:
         try:
             r = float(irr_pct)/100.0
             if not np.isfinite(r): return float("nan")
-            d0 = self.settlement
+            d0 = self._adjust_next_business_day(self.settlement)
             dm = self._adjust_next_business_day(self.end_date)
             t  = max(0.0, (dm - d0).days/360.0)
-            final_payment = 100.0 * (self.oficial)
+            final_payment = 100.0 * self.fx   # antes self.oficial (no existe) -> siempre NaN
             return round(final_payment / ((1.0 + r)**t), 2)
         except Exception:
             return float("nan")
@@ -1926,7 +1930,16 @@ def load_market_data():
 
     df_all = pd.concat([df_bonds, df_notes, df_corps], ignore_index=True, sort=False)
     return df_all, df_mep
-@st.cache_data(ttl=300)
+
+
+def _vigente(vto) -> bool:
+    """True si el instrumento vence después de hoy (se puede comprar con liquidación T+1)."""
+    d = _parse_dt_dmy(vto)
+    return d is not None and d.date() > date.today()
+
+
+# Sin @st.cache_data: se llama cientos de veces por render y cada llamada
+# hasheaba df_all completo para armar la clave -> más caro que el lookup.
 def get_price_for_symbol(df_all: pd.DataFrame, name: str, prefer="px_bid") -> float:
     def _pick(row):
         if prefer in row and pd.notna(row[prefer]): return float(row[prefer])
@@ -2344,6 +2357,8 @@ def build_lecaps_metrics(rows, df_all, today=None):
     df_spec["Ticker"] = df_spec["Ticker"].astype(str).str.strip().str.upper()
     df_spec["Vencimiento"] = pd.to_datetime(df_spec["Vencimiento"], dayfirst=True, errors="coerce")
     df_spec["Emision"]     = pd.to_datetime(df_spec["Emision"],     dayfirst=True, errors="coerce")
+    # Fuera los vencidos: con settlement > vencimiento la TIR no tiene sentido
+    df_spec = df_spec[df_spec["Vencimiento"].dt.date > date.today()].reset_index(drop=True)
 
     # TEM (mensual) a decimal
     def to_tem_dec(x):
@@ -2457,6 +2472,8 @@ def build_lecaps_objects(rows, df_all_norm, price_adj: float = 1.005) -> dict[st
 
     le_map = {}
     for (ticker, vto, emi, tem, tipo) in rows:
+        if not _vigente(vto):
+            continue
         try:
             price = float(px_map.get(str(ticker).strip().upper(), np.nan))
             if not np.isfinite(price):
@@ -2485,12 +2502,6 @@ def build_lecaps_table(spec_rows: list, df_all: pd.DataFrame) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
     return df
-
-def _tna30_tem_from_irr_ea(irr_pct: float):
-    """Convierte TIR EA (%) → TNA30 (%) y TEM (%) usando 30/365."""
-    irr = float(irr_pct or 0.0) / 100.0
-    tem = (1.0 + irr) ** (30.0 / 365.0) - 1.0
-    return round(tem * 12.0 * 100.0, 2), round(tem * 100.0, 2)  # (TNA30, TEM)
 
 # ----------------------------------------------------------------------------
 #  Agrego TO26/BONTE
@@ -2530,12 +2541,15 @@ def build_extra_ars_bonds_for_lecaps(df_all_norm):
         outstanding=0.0, calificacion="-"
     )
 
+    # Solo vigentes (TO26 venció el 17/10/2026)
+    vivos = [b for b in (ty30p, to26) if b.end_date.date() > date.today()]
+
     # Solo incluí en bcp_map los que tienen precio finito
-    bcp_map = {b.name: b for b in (ty30p, to26) if np.isfinite(b.price)}
+    bcp_map = {b.name: b for b in vivos if np.isfinite(b.price)}
 
     # Construyo el DataFrame para la tabla
     extras = []
-    for b in (ty30p, to26):
+    for b in vivos:
         try:
             irr_pct = float(b.xirr())                  # % EA
             dur     = float(b.duration())
@@ -2752,7 +2766,7 @@ def build_dlk_metrics(rows, df_all, fx_value = 1430, today=None):
                 name=row["Ticker"],
                 start_date=row["Emision"].to_pydatetime(),
                 end_date=row["Vencimiento"].to_pydatetime(),
-                oficial=float(fx_value),
+                fx=float(fx_value),   # antes oficial= -> TypeError silencioso, todo NaN
                 price=float(row["Precio"]),
             )
             cfs  = b.cash_flow()
@@ -2797,22 +2811,23 @@ def build_dlk_metrics(rows, df_all, fx_value = 1430, today=None):
 
 @st.cache_resource(show_spinner=False)
 def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
-    _mep = float(mep_rate) if mep_rate and mep_rate > 0 else 1.0
-    _ccl = float(ccl_rate) if ccl_rate and ccl_rate > 0 else 1.0
+    # Sin TC válido -> NaN (antes 1.0: el precio en PESOS pasaba como precio en USD)
+    _mep = float(mep_rate) if mep_rate and np.isfinite(mep_rate) and mep_rate > 0 else np.nan
+    _ccl = float(ccl_rate) if ccl_rate and np.isfinite(ccl_rate) and ccl_rate > 0 else np.nan
 
     def px(sym, prefer="px_bid"):
         try: return get_price_for_symbol(df_all, sym, prefer=prefer)
-        except: return np.nan
+        except Exception: return np.nan
 
     def px_mep(sym, prefer="px_ask"):
         """Precio ARS clase O dividido MEP -> USD"""
         p = px(sym, prefer)
-        return p / _mep if pd.notna(p) else np.nan
+        return p / _mep if pd.notna(p) and np.isfinite(_mep) else np.nan
 
     def px_ccl(sym, prefer="px_ask"):
         """Precio ARS clase O dividido CCL -> USD"""
         p = px(sym, prefer)
-        return p / _ccl if pd.notna(p) else np.nan
+        return p / _ccl if pd.notna(p) and np.isfinite(_ccl) else np.nan
 
     # --- Ojo: si querés ajustar calificaciones, editá acá ---
     gd_29 = bond_calculator_pro(
@@ -2958,7 +2973,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         outstanding=20501, calificacion="CCC-"
     )
     bpb7d = bond_calculator_pro(
-        name="BPBD7", emisor="BCRA", curr="MEP", law="ARG",
+        name="BPB7D", emisor="BCRA", curr="MEP", law="ARG",
         start_date=datetime(2024,4,30), end_date=datetime(2026,4,30),
         payment_frequency=6,
         amortization_dates=["2026-04-30"], amortizations=[100],
@@ -3014,7 +3029,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         amortization_dates=amort_dates,
         amortizations=amort_amts,
         rate=0.0945,                         # 9,45% fijo, SIN step-ups
-        price=prices.loc[prices["symbol"] == "PUA36", "px_ask"].iloc[0] / mep,  # ver nota
+        price=px_mep("PUA36"),               # ask ARS / MEP (antes prices/mep del notebook -> NameError)
         step_up_dates=[],                    # tasa plana → listas vacías
         step_up=[],
         outstanding=650,                     # nominal de emisión (USD M)
@@ -3251,7 +3266,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     co35d = bond_calculator_pro(
             name = "CO35D",
             emisor = "Córdoba",
-            curr = "mep",
+            curr = "MEP",
             law = "NY",
             start_date = datetime(2026, 2, 3),
             end_date = datetime(2035, 2, 3),
@@ -3261,7 +3276,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
                                 "2035-02-03"],
             amortizations = [33, 33, 34],
             rate = 8.6,
-            price = prices.loc[prices["symbol"] == "CO35", "px_ask"].iloc[0] / mep,
+            price = px_mep("CO35"),
             step_up_dates = [],
             step_up = [],
             outstanding = 800, 
@@ -3339,7 +3354,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
     ndg34 = bond_calculator_pro(
         name="NDG34",
         emisor="Neuquén",
-        curr="mep",
+        curr="MEP",
         law="NY",
         start_date=datetime(2026, 8, 25),
         end_date=datetime(2034, 8, 25),
@@ -3347,7 +3362,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         amortization_dates=["2032-08-25", "2033-08-25", "2034-08-25"],
         amortizations=[33.0, 33.0, 34.0],
         rate=0.0735,
-        price=prices.loc[prices["symbol"] == "NDG34", "px_ask"].iloc[0] / mep,
+        price=px_mep("NDG34"),
         step_up_dates=[],
         step_up=[],
         outstanding=500,
@@ -3410,7 +3425,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         rate=0.0955,
     
         # Precio desde tu DataFrame
-        price=prices.loc[prices["symbol"] == "SJO35", "px_ask"].iloc[0] / mep,
+        price=px_mep("SJO35"),
     
         # --- Step-up de cupones ---
         # [2021-02-08, 2022-08-08): 5.00%
@@ -3469,7 +3484,7 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
         amortization_dates = ["2029-10-31"],
         amortizations      = [100],
         rate               = 6,
-        price               = px_mep("AO28", prefer="px_bid"),
+        price               = px_mep("AO29", prefer="px_bid"),   # antes "AO28" (copy-paste)
         step_up_dates      = [],
         step_up            = [],
         outstanding        = 2000,
@@ -3495,12 +3510,15 @@ def manual_bonds_factory(df_all, mep_rate=None, ccl_rate=None):
             "2029-10-31",
         ])
 
-    return [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
-            al_29, al_30, al_35, ae_38, al_41,
-            bpb7d, bpc7d, bpd7d, bpa8d, bpb8d,
-            ba7dd, bb7dd, bc7dd, bpy6d,
-            pm29d, sfd34, bdc33, co32d, an_29,
-            s24dd, ndt5d, ef25d, em33d, ao_27, ao_28, ao_29]
+    todos = [gd_29, gd_30, gd_35, gd_38, gd_41, gd_46,
+             al_29, al_30, al_35, ae_38, al_41,
+             bpb7d, bpc7d, bpd7d, bpa8d, bpb8d,
+             ba7dd, bb7dd, bc7dd, bpy6d,
+             pm29d, sfd34, bdc33, co32d, an_29,
+             s24dd, ndt5d, ef25d, em33d, ao_27, ao_28, ao_29,
+             pua36, co35d, ndg34, sjo5d]          # estos 4 se creaban pero no se devolvían
+    # Fuera los vencidos (BPB7D, BPY6D): sin flujos futuros la TIR da NaN
+    return [b for b in todos if b.end_date.date() > date.today()]
 
 
 # =========================
@@ -3923,15 +3941,15 @@ def build_cashflow_table(selected_bonds: list, mode: str, inputs: dict, comision
 # =========================
 
 def clone_with_price(b: bond_calculator_pro, new_price: float) -> bond_calculator_pro:
-    return bond_calculator_pro(
-        name=b.name, emisor=b.emisor, curr=b.curr, law=b.law,
-        start_date=b.start_date, end_date=b.end_date,
-        payment_frequency=b.payment_frequency,
-        amortization_dates=b.amortization_dates, amortizations=b.amortizations,
-        rate=b.rate, price=new_price,
-        step_up_dates=b.step_up_dates, step_up=b.step_up,
-        outstanding=b.outstanding, calificacion=b.calificacion
-    )
+    """
+    Copia el bono conservando su clase. Reconstruir con bond_calculator_pro(...)
+    perdía el calendario explícito de bond_exact_schedule (AO27/AO28/AO29):
+    el clon generaba fechas hacia atrás (28/11 en vez de 30/11, etc.).
+    """
+    bb = copy.copy(b)
+    bb._cache = {}            # caché propia, no compartida con el original
+    bb.price = float(new_price)
+    return bb
 
 def compare_metrics_three(bond_map: Dict[str, bond_calculator_pro], sel_names: list, prices: list) -> pd.DataFrame:
     clones = []
@@ -4711,12 +4729,17 @@ def main():
         # CER t-10 hábiles (calendario Argentina)
         try:
             df_cer_series = fetch_cer_df(30, daily_key=dkey)
-            _today_d = date.today()
-            ar_holidays_cal = holidays.Argentina(years=[_today_d.year, _today_d.year - 1])
-            ar_holiday_list = [str(d) for d in ar_holidays_cal.keys()]
-            ar_calendar = np.busdaycalendar(holidays=ar_holiday_list)
-            fecha_10_dias = np.busday_offset(_today_d, -10, roll="preceding", busdaycal=ar_calendar)
-            target_cer = pd.Timestamp(fecha_10_dias).date()
+            # 10 hábiles hacia atrás con QuantLib Merval (mismo calendario que el resto
+            # de la app; antes holidays + np.busdaycalendar). Misma lógica que
+            # np.busday_offset(hoy, -10, roll="preceding").
+            _cal = ql.Argentina(ql.Argentina.Merval)
+            _qd = _cal.adjust(ql.Date.todaysDate(), ql.Preceding)
+            _n = 0
+            while _n < 10:
+                _qd = _qd - 1
+                if _cal.isBusinessDay(_qd):
+                    _n += 1
+            target_cer = date(_qd.year(), _qd.month(), _qd.dayOfMonth())
             cer_final = cer_at_or_before(df_cer_series, target_cer)
         except Exception as e:
             st.warning(f"No se pudo obtener CER (BCRA). Fijo CER_final=100. Detalle: {e}")
@@ -4779,7 +4802,7 @@ def main():
             ],
             amortizations=[5]*20, rate=3.31, price=_px_bid("CUAP"), fr=2,
         )
-        cer_bonos_objs = [tx26, tx28, dicp, cuap]
+        cer_bonos_objs = [b for b in (tx26, tx28, dicp, cuap) if b.end_date.date() > date.today()]
     
         # ---------- CER Letras (rows → objetos) ----------
         cer_rows = [
@@ -4810,6 +4833,8 @@ def main():
         ]
         cer_letras_objs = []
         for tk, vto, emi, cer_ini, _ in cer_rows:
+            if not _vigente(vto):
+                continue
             try:
                 price = get_price_for_symbol(df_all_norm, tk, prefer="px_ask")
             except Exception:
@@ -4859,6 +4884,8 @@ def main():
         rows_tbl = []
         
         for tk, emi, vto, tipo in dlk_rows:
+            if not _vigente(vto):
+                continue
             price = _price_any(df_all_norm, tk, prefer="px_ask")
             vto_dt = pd.to_datetime(vto, dayfirst=True, errors="coerce")
             dias   = (vto_dt.normalize() - pd.Timestamp.today().normalize()).days if pd.notna(vto_dt) else np.nan
@@ -5264,6 +5291,8 @@ def main():
             ("X30N6", 659.6789, "2025-12-15", "2026-11-30", "S30N6", 2.30, "2025-12-15"),
             ("TZX27", 200.4,    "2024-02-01", "2027-06-30", "T30J7", 2.58, "2026-01-16"),
         ]
+        # Solo pares vigentes: con fixing ya pasado, el "CER implícito" es ruido
+        PARES_INF = [p for p in PARES_INF if pd.to_datetime(p[3]).date() > date.today()]
 
         # ── CER actual ────────────────────────────────────────────
         try:
@@ -5366,6 +5395,11 @@ def main():
             })
 
         df_fischer_inf = pd.DataFrame(fischer_rows)
+        if df_fischer_inf.empty:
+            # antes: KeyError 'Inf mensual%' al filtrar un DataFrame sin columnas
+            st.warning("No hay segmentos con meses de IPC entre fixings para descomponer. "
+                       "Sumá pares CER/Fija vigentes en PARES_INF.")
+            st.stop()
 
         # ── Gráfico ───────────────────────────────────────────────
         df_plot = df_fischer_inf[df_fischer_inf["Inf mensual%"].notna()].copy()
